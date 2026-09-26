@@ -16,6 +16,7 @@ from enaportal.portal import MAX_GET_LENGTH, PortalClient
 from enaportal.schema import SchemaClient
 
 SEARCH_URL = f"{PORTAL_BASE_URL}search"
+FILEREPORT_URL = f"{PORTAL_BASE_URL}filereport"
 COUNT_URL = f"{PORTAL_BASE_URL}count"
 
 TSV = (
@@ -37,8 +38,9 @@ def client(http: ENAHTTPClient, tmp_path: Path) -> PortalClient:
     schema = SchemaClient(cache_dir=tmp_path, offline=True)
     with pytest.warns(UserWarning, match="packaged schema snapshot"):
         schema.results()
-        schema.return_fields("read_run")
-        schema.search_fields("read_run")
+        for result in ("read_run", "analysis"):
+            schema.return_fields(result)
+            schema.search_fields(result)
     return PortalClient(http=http, schema=schema)
 
 
@@ -239,3 +241,106 @@ def test_an_http_200_text_error_still_raises(client: PortalClient) -> None:
 
     with pytest.raises(ENAQueryError, match="Unsupported param offset"):
         client.search("read_run")
+
+
+@respx.mock
+def test_filereport_sends_the_accession(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text=TSV))
+
+    client.filereport("SRX017289")
+
+    params = route.calls[0].request.url.params
+    assert params["accession"] == "SRX017289"
+    assert params["result"] == "read_run"
+
+
+@respx.mock
+def test_filereport_defaults_to_read_run(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text=TSV))
+
+    client.filereport("PRJEB1787", fields=["run_accession"])
+
+    assert route.calls[0].request.url.params["result"] == "read_run"
+
+
+@respx.mock
+def test_filereport_sends_one_request_per_accession(client: PortalClient) -> None:
+    """ENA answers a comma-separated list with zero rows, so they cannot be joined."""
+    route = respx.get(FILEREPORT_URL).mock(
+        side_effect=[
+            httpx.Response(200, text="run_accession\nERR1\n"),
+            httpx.Response(200, text="run_accession\nERR2\n"),
+        ]
+    )
+
+    frame = client.filereport(["ERR1", "ERR2"], fields=["run_accession"])
+
+    assert route.call_count == 2
+    assert [call.request.url.params["accession"] for call in route.calls] == ["ERR1", "ERR2"]
+    assert frame["run_accession"].to_list() == ["ERR1", "ERR2"]
+
+
+@respx.mock
+def test_filereport_never_joins_accessions_with_a_comma(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text="run_accession\n"))
+
+    client.filereport(["ERR1", "ERR2"], fields=["run_accession"])
+
+    assert all("," not in call.request.url.params["accession"] for call in route.calls)
+
+
+def test_filereport_with_no_accessions_does_not_call_ena(client: PortalClient) -> None:
+    with respx.mock:
+        route = respx.get(FILEREPORT_URL)
+        assert client.filereport([]).is_empty()
+        assert route.call_count == 0
+
+
+@respx.mock
+def test_filereport_validates_fields_before_sending(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL)
+
+    with pytest.raises(ENAQueryError, match="run_accession"):
+        client.filereport("ERR1", fields=["run_acession"])
+
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_filereport_validates_the_result_before_sending(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL)
+
+    with pytest.raises(ENAQueryError, match="Did you mean 'read_run'"):
+        client.filereport("ERR1", result="read_runs")
+
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_related_asks_only_for_the_accession_columns(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text=TSV))
+
+    client.related("PRJEB1787")
+
+    requested = route.calls[0].request.url.params["fields"].split(",")
+    assert "run_accession" in requested
+    assert "study_accession" in requested
+    assert "fastq_ftp" not in requested
+
+
+@respx.mock
+def test_related_can_target_another_result_type(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text=TSV))
+
+    client.related("PRJEB1787", to="analysis")
+
+    assert route.calls[0].request.url.params["result"] == "analysis"
+
+
+@respx.mock
+def test_related_honours_explicit_fields(client: PortalClient) -> None:
+    route = respx.get(FILEREPORT_URL).mock(return_value=httpx.Response(200, text=TSV))
+
+    client.related("PRJEB1787", fields=["run_accession"])
+
+    assert route.calls[0].request.url.params["fields"] == "run_accession"
