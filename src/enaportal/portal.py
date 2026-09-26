@@ -151,6 +151,77 @@ class PortalClient:
             return _frame_from_records(self._request_json("search", params))
         return self._read_tsv("search", params)
 
+    def filereport(
+        self,
+        accession: str | Sequence[str],
+        *,
+        result: str = "read_run",
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        format: Format = "tsv",
+        validate: bool = True,
+    ) -> pl.DataFrame:
+        """Everything ENA holds for an accession, including its file locations.
+
+        The accession may name any level ENA can map to the result type: a
+        study, experiment, sample or run accession all work for read_run, in
+        either the primary or the secondary form.
+
+        ENA accepts exactly one accession per request and answers a
+        comma-separated list with zero rows rather than an error, so a sequence
+        is sent as one request each and the frames are stacked.
+        """
+        accessions = [accession] if isinstance(accession, str) else list(accession)
+        if not accessions:
+            return pl.DataFrame()
+        if validate:
+            self.schema.validate_result(result)
+            if fields:
+                self.schema.validate_return_fields(result, fields)
+
+        frames = [self._one_filereport(one, result, fields, limit, format) for one in accessions]
+        populated = [frame for frame in frames if frame.width]
+        if not populated:
+            return pl.DataFrame()
+        return pl.concat(populated, how="diagonal_relaxed")
+
+    def related(
+        self,
+        accession: str,
+        *,
+        to: str = "read_run",
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        validate: bool = True,
+    ) -> pl.DataFrame:
+        """Navigate from one accession to the objects related to it.
+
+        There is no links endpoint on the Portal API. There does not need to be:
+        rows are denormalised, so one filereport call on a study accession
+        already returns its runs carrying their experiment and sample. With no
+        fields given this returns just the accession columns, which is the
+        navigation table rather than all 195 of them.
+        """
+        chosen = list(fields) if fields else [f.column_id for f in self.schema.link_fields(to)]
+        return self.filereport(accession, result=to, fields=chosen, limit=limit, validate=validate)
+
+    def _one_filereport(
+        self,
+        accession: str,
+        result: str,
+        fields: Sequence[str] | None,
+        limit: int | None,
+        format: Format,
+    ) -> pl.DataFrame:
+        params: dict[str, Any] = {"accession": accession, "result": result, "format": format}
+        if fields:
+            params["fields"] = ",".join(fields)
+        if limit is not None:
+            params["limit"] = limit
+        if format == "json":
+            return _frame_from_records(self._request_json("filereport", params))
+        return self._read_tsv("filereport", params)
+
     def _params(
         self,
         result: str,
