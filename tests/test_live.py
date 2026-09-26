@@ -7,12 +7,15 @@ still hold, not that any particular record exists.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import date
+from itertools import pairwise
 from pathlib import Path
 
 import httpx
 import polars as pl
 import pytest
 
+from enaportal.bulk import Partition, outside_query, range_query
 from enaportal.files import file_urls, to_manifest
 from enaportal.portal import PortalClient
 from enaportal.schema import SchemaClient
@@ -179,3 +182,103 @@ def test_a_manifest_can_be_built_from_a_search_result(client: PortalClient) -> N
     assert samplesheet.splitlines()[0] == "sample,fastq_1,fastq_2,strandedness"
     assert len(samplesheet.splitlines()) == 6
     assert len(accessions.splitlines()) == 5
+
+
+def test_a_closed_looking_date_range_is_really_half_open(client: PortalClient) -> None:
+    """The fact M5's partitioning rests on.
+
+    `f>=A AND f<=B` selects `A <= f < B`, so adjacent partitions sharing a
+    boundary tile a range exactly. If ENA ever makes the upper bound
+    inclusive, every boundary day would be fetched twice.
+    """
+    query = "tax_tree(4932)"
+    field = "first_public"
+    start, middle, end = date(2020, 1, 1), date(2020, 7, 1), date(2021, 1, 1)
+
+    whole = client.count("read_run", query=range_query(query, field, start, end))
+    left = client.count("read_run", query=range_query(query, field, start, middle))
+    right = client.count("read_run", query=range_query(query, field, middle, end))
+    single = client.count("read_run", query=range_query(query, field, middle, middle))
+
+    assert whole == left + right
+    assert single == 0, "an empty range came back populated, so the bounds are inclusive"
+
+
+def test_not_is_an_exact_complement(client: PortalClient) -> None:
+    """What lets the residual partition reach rows no date range can."""
+    query = "tax_tree(4932)"
+    field = "first_public"
+    start, end = date(2015, 1, 1), date(2020, 1, 1)
+
+    total = client.count("read_run", query=query)
+    inside = client.count("read_run", query=range_query(query, field, start, end))
+    outside = client.count("read_run", query=outside_query(query, field, start, end))
+
+    assert inside + outside == total
+
+
+def test_a_large_query_plans_into_partitions_under_the_threshold(client: PortalClient) -> None:
+    plan = client.plan_partitions("read_run", query="tax_tree(4932)", threshold=50_000)
+
+    assert plan.total > 100_000
+    assert plan.covered == plan.total, "the date field did not reach every matching row"
+    assert plan.resumable
+    assert not plan.oversized
+    assert sum(part.count for part in plan.partitions) == plan.covered
+    for earlier, later in pairwise(plan.partitions):
+        assert earlier.end == later.start, "partitions do not tile the range"
+
+
+def test_bulk_search_returns_the_same_rows_as_one_plain_search(
+    client: PortalClient, tmp_path: Path
+) -> None:
+    """Partitioning must neither drop a row nor fetch one twice."""
+    query = 'tax_tree(4932) AND library_strategy="Bisulfite-Seq"'
+    fields = ["run_accession"]
+
+    whole = client.search("read_run", query=query, fields=fields)
+    parts = client.bulk_search(
+        "read_run",
+        query=query,
+        fields=fields,
+        threshold=10,
+        checkpoint_dir=tmp_path / "job",
+    )
+
+    assert parts.height > 1
+    assert sorted(parts["run_accession"]) == sorted(whole["run_accession"])
+
+
+def test_a_killed_bulk_fetch_resumes_without_refetching(
+    client: PortalClient, tmp_path: Path
+) -> None:
+    """M5's acceptance criterion, against the live API."""
+    directory = tmp_path / "job"
+    query = 'tax_tree(4932) AND library_strategy="Bisulfite-Seq"'
+    job = {"query": query, "fields": ["run_accession"], "threshold": 10}
+
+    done: list[Partition] = []
+
+    def die_after_two(part: Partition) -> None:
+        done.append(part)
+        if len(done) == 2:
+            raise KeyboardInterrupt("killed")
+
+    with pytest.raises(KeyboardInterrupt):
+        client.bulk_search(
+            "read_run",
+            checkpoint_dir=directory,
+            concurrency=1,
+            on_partition=die_after_two,
+            **job,
+        )
+
+    landed = {path: path.stat().st_mtime_ns for path in directory.glob("*.tsv")}
+    assert len(landed) == 2
+
+    frame = client.bulk_search("read_run", checkpoint_dir=directory, concurrency=2, **job)
+
+    assert frame.height == client.count("read_run", query=query)
+    assert all(path.stat().st_mtime_ns == mtime for path, mtime in landed.items()), (
+        "a partition that was already on disk was fetched again"
+    )
