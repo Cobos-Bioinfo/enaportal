@@ -32,8 +32,8 @@ runtime and caches it, and a scheduled CI job tells us when that schema moves.
   `/results`, `/returnFields` and `/searchFields`, cached on disk with a TTL.
 - **Resumable bulk retrieval.** The Portal API has no pagination: `offset` and
   `sortFields` are both rejected, so a large query is one long non-resumable
-  response. `enaportal` splits big queries into counted partitions and
-  checkpoints them.
+  response. `enaportal` splits big queries into counted date partitions and
+  checkpoints each one, so a killed run picks up where it stopped.
 - **Library first, CLI second.** The CLI is a thin layer over the public API.
 - **Polars, not pandas.** Faster on the row counts ENA returns, and lighter.
 - **Typed throughout**, with `py.typed` shipped.
@@ -54,8 +54,8 @@ frame = enaportal.search(
 ```
 
 ENA applies no default limit, so leaving `limit` out returns the whole result
-set. That is one long download with no way to resume it, which is the problem
-resumable retrieval exists to solve. Pass an explicit `limit` until it lands.
+set in one long download with no way to resume it. Use `bulk_search` instead
+for anything large.
 
 `search` returns a Polars DataFrame. Every column is a string: ENA packs
 multiple values into one cell with semicolons, so inferring types would give
@@ -84,6 +84,68 @@ request. Set `ENAPORTAL_CACHE_DIR` to move the cache, or call
 `enaportal.refresh_schema()` to re-read it now. If ENA is unreachable the
 library falls back to the cache and then to a snapshot shipped in the package,
 warning each time, so it degrades instead of failing.
+
+## Bulk retrieval
+
+The Portal API has no cursor. `offset` and `sortFields` are both rejected and
+the row order is not stable, so a large result set cannot be paged, and a
+download that breaks at 90% has to start again.
+
+`bulk_search` splits the query instead. It bisects a date range with `/count`
+until every piece is under a threshold, fetches the pieces with bounded
+concurrency, and writes each one to disk as it lands:
+
+```python
+frame = enaportal.bulk_search(
+    "read_run",
+    query="tax_tree(4932)",
+    fields=["run_accession", "first_public", "read_count"],
+)
+```
+
+That query is 276,447 rows. It plans into 8 partitions in about a second,
+because `/count` is cheap, and fetches them in around 17 seconds. Kill it
+halfway and run it again: the completed partitions are already on disk, so it
+only fetches what is missing.
+
+To see the split before committing to it:
+
+```python
+plan = enaportal.plan_partitions("read_run", query="tax_tree(4932)")
+plan.total  # 276447
+plan.partitions  # 8 of them, each with its own count, date range and query
+plan.oversized  # partitions a single day could not be split below
+```
+
+Checkpoints live under the platform cache directory, keyed by the job, and are
+removed once the job finishes so the next call fetches current rows. Pass
+`checkpoint_dir` to put them somewhere you choose and keep them, which also
+leaves you the raw per-partition TSVs:
+
+```python
+enaportal.bulk_search(
+    "read_run",
+    query="tax_tree(4932)",
+    checkpoint_dir="yeast-runs/",
+    threshold=20_000,
+    concurrency=4,
+    on_partition=lambda part: print(part.stem, part.count),
+)
+```
+
+The partition key is a searchable date field, `first_public` by default
+because it never moves. Two cases are handled out loud rather than silently:
+a result type with no date field at all (only `taxon`) falls back to a single
+unresumable fetch with a warning, and rows a date range cannot reach are
+counted and fetched as a residual partition.
+
+For a single query too large to hold in memory, `search_to_file` streams
+straight to disk:
+
+```python
+with PortalClient() as ena:
+    rows = ena.search_to_file("runs.tsv", "read_run", query="tax_tree(4932)")
+```
 
 ## Files
 
@@ -135,13 +197,14 @@ with PortalClient() as ena:
 ```
 
 ENA allows 50 requests per second and rejects the excess with HTTP 429.
-`enaportal` waits out a 429 and retries it, so a loop like the one above does
-not need its own throttling.
+`enaportal` spaces its requests to stay under half of that, across every
+thread of one client, and waits out a 429 if one arrives anyway. A loop like
+the one above needs no throttling of its own, and neither does a bulk fetch.
 
 ## Scope
 
-In scope: the Portal API (`search`, `count`, `filereport`, `related`) and the
-Browser API (records by accession as XML, EMBL or FASTA).
+In scope: the Portal API (`search`, `count`, `bulk_search`, `filereport`,
+`related`) and the Browser API (records by accession as XML, EMBL or FASTA).
 
 On files: `enaportal` resolves download URLs and checksums, and exports
 manifests that `aria2c`, `curl` or

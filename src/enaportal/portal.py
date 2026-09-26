@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -18,6 +18,10 @@ import polars as pl
 
 from enaportal._http import DEFAULT_TIMEOUT, PORTAL_BASE_URL, ENAHTTPClient, Params, ResponseShape
 from enaportal._query import extract_field_names
+from enaportal._tsv import read_ena_tsv
+from enaportal.bulk import DEFAULT_CONCURRENCY, DEFAULT_THRESHOLD, BulkPlan, Partition
+from enaportal.bulk import bulk_search as _bulk_search
+from enaportal.bulk import plan_partitions as _plan_partitions
 from enaportal.errors import ENAQueryError
 from enaportal.schema import DEFAULT_TTL_SECONDS, Field, Result, SchemaClient
 
@@ -151,6 +155,102 @@ class PortalClient:
             return _frame_from_records(self._request_json("search", params))
         return self._read_tsv("search", params)
 
+    def search_to_file(
+        self,
+        path: Path | str,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        data_portal: str | None = None,
+        include_metagenomes: bool | None = None,
+        validate: bool = True,
+    ) -> int:
+        """Stream a query straight to a TSV file, returning the rows written.
+
+        Memory stays flat however large the result set is, which is what makes
+        it the right shape for a bulk checkpoint. TSV only: it is the format
+        ENA streams, and the one that can be concatenated afterwards.
+        """
+        params = self._params(
+            result,
+            query=query,
+            data_portal=data_portal,
+            include_metagenomes=include_metagenomes,
+            validate=validate,
+        )
+        if fields:
+            if validate:
+                self.schema.validate_return_fields(result, fields)
+            params["fields"] = ",".join(fields)
+        if limit is not None:
+            params["limit"] = limit
+        params["format"] = "tsv"
+
+        written = 0
+        with Path(path).open("wb") as handle:
+            for line in self._stream("search", params):
+                handle.write(line.encode("utf-8"))
+                handle.write(b"\n")
+                written += 1
+        return max(written - 1, 0)
+
+    def bulk_search(
+        self,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        threshold: int = DEFAULT_THRESHOLD,
+        partition_field: str | None = None,
+        checkpoint_dir: Path | str | None = None,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        resume: bool = True,
+        validate: bool = True,
+        on_partition: Callable[[Partition], None] | None = None,
+    ) -> pl.DataFrame:
+        """Fetch a whole result set in resumable, checkpointed pieces.
+
+        ENA has no cursor, so this partitions the query by date range instead,
+        counts each range before fetching it and writes every part to disk. A
+        run that is killed resumes without refetching what already landed.
+        """
+        return _bulk_search(
+            self,
+            result,
+            query=query,
+            fields=fields,
+            threshold=threshold,
+            partition_field=partition_field,
+            checkpoint_dir=checkpoint_dir,
+            concurrency=concurrency,
+            resume=resume,
+            validate=validate,
+            on_partition=on_partition,
+        )
+
+    def plan_partitions(
+        self,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        threshold: int = DEFAULT_THRESHOLD,
+        partition_field: str | None = None,
+        validate: bool = True,
+    ) -> BulkPlan:
+        """How bulk_search would split this query, without fetching any rows."""
+        return _plan_partitions(
+            self,
+            result,
+            query=query,
+            fields=fields,
+            threshold=threshold,
+            partition_field=partition_field,
+            validate=validate,
+        )
+
     def filereport(
         self,
         accession: str | Sequence[str],
@@ -252,7 +352,7 @@ class PortalClient:
         if not buffer.getbuffer().nbytes:
             return pl.DataFrame()
         buffer.seek(0)
-        return _read_ena_tsv(buffer)
+        return read_ena_tsv(buffer)
 
     def _stream(self, path: str, params: Params) -> Iterator[str]:
         if _needs_post(params):
@@ -292,19 +392,6 @@ def _needs_post(params: Params) -> bool:
     """Whether the encoded parameters are too long to send in a request line."""
     encoded = sum(len(str(key)) + len(str(value)) + 2 for key, value in params.items())
     return encoded > MAX_GET_LENGTH
-
-
-def _read_ena_tsv(source: io.BytesIO) -> pl.DataFrame:
-    # ENA does not quote its TSV, and free-text fields such as study_title
-    # contain bare double quotes, so quote parsing has to be off entirely.
-    return pl.read_csv(
-        source,
-        separator="\t",
-        has_header=True,
-        quote_char=None,
-        infer_schema_length=0,
-        truncate_ragged_lines=True,
-    )
 
 
 def _frame_from_records(records: Any) -> pl.DataFrame:

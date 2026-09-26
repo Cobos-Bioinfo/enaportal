@@ -7,10 +7,12 @@ own PortalClient so the connection pool and the schema cache are reused.
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 import polars as pl
 
+from enaportal.bulk import DEFAULT_CONCURRENCY, DEFAULT_THRESHOLD, BulkPlan, Partition
 from enaportal.portal import Format, PortalClient
 from enaportal.schema import Field, Result
 
@@ -69,6 +71,54 @@ def count(
     )
 
 
+def bulk_search(
+    result: str,
+    *,
+    query: str | None = None,
+    fields: Sequence[str] | None = None,
+    threshold: int = DEFAULT_THRESHOLD,
+    partition_field: str | None = None,
+    checkpoint_dir: Path | str | None = None,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    resume: bool = True,
+    validate: bool = True,
+    on_partition: Callable[[Partition], None] | None = None,
+) -> pl.DataFrame:
+    """Fetch a whole result set in resumable, checkpointed pieces."""
+    return default_client().bulk_search(
+        result,
+        query=query,
+        fields=fields,
+        threshold=threshold,
+        partition_field=partition_field,
+        checkpoint_dir=checkpoint_dir,
+        concurrency=concurrency,
+        resume=resume,
+        validate=validate,
+        on_partition=on_partition,
+    )
+
+
+def plan_partitions(
+    result: str,
+    *,
+    query: str | None = None,
+    fields: Sequence[str] | None = None,
+    threshold: int = DEFAULT_THRESHOLD,
+    partition_field: str | None = None,
+    validate: bool = True,
+) -> BulkPlan:
+    """How bulk_search would split a query, without fetching any rows."""
+    return default_client().plan_partitions(
+        result,
+        query=query,
+        fields=fields,
+        threshold=threshold,
+        partition_field=partition_field,
+        validate=validate,
+    )
+
+
 def filereport(
     accession: str | Sequence[str],
     *,
@@ -122,9 +172,11 @@ def refresh_schema(result: str | None = None) -> None:
 
 
 __all__ = [
+    "bulk_search",
     "count",
     "default_client",
     "filereport",
+    "plan_partitions",
     "refresh_schema",
     "related",
     "results",

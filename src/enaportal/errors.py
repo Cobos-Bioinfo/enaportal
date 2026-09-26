@@ -54,7 +54,12 @@ class ENASchemaError(ENAError):
     """ENA's schema could not be read from the network, the cache or the snapshot."""
 
 
+class ENACheckpointError(ENAError):
+    """A bulk checkpoint directory does not belong to the job being resumed."""
+
+
 __all__ = [
+    "ENACheckpointError",
     "ENAConnectionError",
     "ENAError",
     "ENAHTTPError",

@@ -19,8 +19,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M2 Introspection and cache | done 2026-09-26 |
 | M3 search and count | done 2026-09-26 |
 | M4 filereport, related, manifests | done 2026-09-26 |
-| M5 Resumable bulk retrieval | **next** |
-| M6 Browser API | not started |
+| M5 Resumable bulk retrieval | done 2026-09-26 |
+| M6 Browser API | **next** |
 | M7 CLI | not started |
 | M8 Test suite | not started |
 | M9 Schema-drift workflow | not started |
@@ -199,6 +199,12 @@ re-probe as a matter of course.
 | xref service | `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/...`, and it **does** support `offset` and `limit`. Pagination exists there but not on the Portal |
 | Browser `links` | `/{format}/links/{study\|sample\|taxon}?accession=&result=`. Both parameters are required and neither is documented; omitting one gives an opaque Spring Boot 400. Returned 882 KB of XML for one study |
 | Primary and secondary accessions | One object has both forms, e.g. study `PRJEB1787` and `ERP001736`. The Portal exposes both as separate columns, so anything taking an accession must accept either |
+| Date ranges are **half-open** | `f>=A AND f<=B` selects `A <= f < B`. Probed 2026-09-26: 2020 whole year 15,070, `[Jan1,Jun30)` 7,905, `[Jul1,Dec31)` 7,089, which do not sum; `[Jan1,Jul1)` 7,981 and `[Jul1,Jan1)` 7,089 do. This is a gift, not a trap: adjacent partitions sharing a boundary tile a range exactly, with no day arithmetic |
+| Date operators | `<` and `<=` are the same operator, and so are `>` and `>=`. `f=2020-06-30` returns **0** even for rows displaying that exact value, so equality on a date is useless |
+| Finest date range | One day, `[D, D+1)`. `f>=D AND f<=D` is empty, not a single day |
+| `AND` binds tighter than `OR` | Appending a range to `a OR b` restricts only `b`. Unparenthesised, one probe returned 8,596,605 rows where the bracketed form returned 59,553. **Always parenthesise a caller's query before composing onto it** |
+| `NOT` | An exact set complement, including rows the inner clause cannot reach. `q AND NOT (range)` plus `q AND range` equals `q`, verified at 261,377 + 15,070 = 276,447 |
+| Date search field coverage | Every result type has one except **`taxon`**, which has 13 search fields and no date, no orderable number. `assembly` has only `last_updated` |
 | Denormalised rows | A `read_run` row carries `experiment_accession`, `sample_accession`, `secondary_sample_accession`, `study_accession`, `secondary_study_accession`, `submission_accession`, `tax_id`. `analysis` adds `related_analysis_accession`, `sample` adds `related_sample_accession`. Navigation needs no extra endpoint |
 
 **The three facts that shape the architecture:** no `offset` and no
@@ -209,6 +215,10 @@ alone, so M5 must partition by query range and never by row position. And ENA
 returns some errors as plain text with **HTTP 200**, so status-code checking
 alone is insufficient; body sniffing belongs in the HTTP layer (M1), not bolted
 on later.
+
+**The fact that made M5 work:** date ranges are half-open. Partitions that
+share a boundary tile exactly, so one child of a bisection can be counted and
+the other taken as the difference. That is what keeps the plan cheap.
 
 ---
 
@@ -415,6 +425,56 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-26, M5.** `bulk.py` with `plan_partitions()` and `bulk_search()` on
+  `PortalClient`, over `_checkpoint.py` for the on-disk state and a new
+  `search_to_file()` that streams a query to a file without building a frame.
+  A 276,447 row query plans into 8 partitions in 1.2 s, fetches in 17 s at
+  concurrency 4, and survives being killed: re-running it refetched nothing
+  that had landed and returned 276,447 unique run accessions. That is faster
+  than the 34.6 s recorded for the same query as one unresumable response, so
+  partitioning costs nothing even when nothing goes wrong.
+  The discovery that made it cheap: **ENA date ranges are half-open.**
+  `f>=A AND f<=B` means `A <= f < B`. The first probe looked like data loss,
+  a year of 15,070 splitting into halves of 7,905 and 7,089, and it took a
+  boundary-day query returning 0 to see that both bounds behave as `<`. It
+  turns the design around. Partitions sharing a boundary tile a range exactly,
+  so a bisection can count one child and take the other as the difference,
+  halving the requests a plan costs. Had the range been closed, every boundary
+  day would have been fetched twice and every split would have needed day
+  arithmetic to avoid it.
+  The trap that nearly shipped: **`AND` binds tighter than `OR`.** Composing a
+  range onto `a OR b` restricts only `b`. One probe returned 8,596,605 rows
+  unparenthesised where the bracketed form returned 59,553, so `range_query`
+  wraps the caller's query and a test pins it.
+  Two silent failures are now loud instead. Rows a date range cannot reach
+  would simply be missing, so the plan compares `/count` of the query against
+  `/count` of the range; `NOT` turned out to be an exact set complement, so
+  the difference is fetched as a residual partition rather than only reported.
+  And a single day is the finest range ENA can express, so a day holding more
+  than the threshold is emitted oversized with a warning rather than bisected
+  forever.
+  Checkpoint state is the part files themselves, not a field in the manifest:
+  each is written to a temporary file and renamed into place only once
+  complete, so presence means finished and no lock is needed across the
+  thread pool. The manifest stores the plan and is keyed by job identity with
+  the counts deliberately excluded, because counts move as ENA grows and a
+  resume has to recognise yesterday's job rather than re-bisect it into a
+  different shape.
+  The default checkpoint directory is removed on success and an explicit one
+  is kept. Keeping both would have made `bulk_search` a silent cache of stale
+  rows, which is the opposite of what this library is for.
+  Rate limiting moved into `_http.py` rather than the fetch stage, as the
+  milestone required: the bisect loop is a tight run of cheap `/count` calls
+  and is the easiest way to breach 50 requests per second by accident. The
+  limiter spaces requests instead of using a token bucket, because a full
+  bucket plus a refill puts twice the rate into a window straddling the two.
+  It defaults to half the documented limit, since the budget is per source
+  address and the client cannot see what else is sharing it.
+  `taxon` is the only result type with no date search field, and it has no
+  orderable number either, so the plan's documented fallback of one
+  unresumable fetch with a loud warning is genuinely the right answer rather
+  than a placeholder.
 
 - **2026-09-26, M4.** `filereport()` and `related()` on `PortalClient`, plus
   `files.py` with `file_urls()` for tier 1 and `to_manifest()` for tier 2 in
