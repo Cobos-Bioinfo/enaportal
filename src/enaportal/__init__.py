@@ -3,7 +3,9 @@
 from enaportal._api import (
     count,
     default_client,
+    filereport,
     refresh_schema,
+    related,
     results,
     return_fields,
     search,
@@ -19,6 +21,7 @@ from enaportal.errors import (
     ENASchemaError,
     ENATimeoutError,
 )
+from enaportal.files import file_urls, to_manifest
 from enaportal.portal import PortalClient
 from enaportal.schema import Field, Result, SchemaClient
 
@@ -37,9 +40,13 @@ __all__ = [
     "__version__",
     "count",
     "default_client",
+    "file_urls",
+    "filereport",
     "refresh_schema",
+    "related",
     "results",
     "return_fields",
     "search",
     "search_fields",
+    "to_manifest",
 ]

@@ -18,8 +18,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M1 HTTP layer | done 2026-09-26 |
 | M2 Introspection and cache | done 2026-09-26 |
 | M3 search and count | done 2026-09-26 |
-| M4 filereport, related, manifests | **next** |
-| M5 Resumable bulk retrieval | not started |
+| M4 filereport, related, manifests | done 2026-09-26 |
+| M5 Resumable bulk retrieval | **next** |
 | M6 Browser API | not started |
 | M7 CLI | not started |
 | M8 Test suite | not started |
@@ -169,7 +169,14 @@ re-probe as a matter of course.
 | Field `type` values | `text`, `number`, `date`, `boolean`, `latlon`, `list`, `taxonomy`, `controlled value`, `indexed`. Wider than first recorded |
 | Missing field `type` | **`type` is absent on 247 of 2845 fields** (40 of 195 `read_run` return fields). The type word sits in `description` instead, e.g. `{"columnId": "run_date", "description": "date"}`. Every untyped description is one of `text`, `number`, `latlon`, `boolean`, `date` |
 | `/count` body | A one-column TSV with a `count` header, not a bare number |
-| Result ordering | **Not stable.** Two identical `limit=5` queries return different rows |
+| `filereport` accessions | **One per request.** A comma-separated list returns zero rows with HTTP 200 and no error, and a repeated `accession` parameter silently uses the first. Loop, never join |
+| `filereport` accession level | Any level ENA can map to the result: study, experiment, sample or run all work for `read_run`, in either the primary or the secondary form |
+| `filereport` `limit` | Accepted, and behaves as on `search` |
+| File source families | Columns come in families `{prefix}_ftp`, `_md5`, `_bytes`, `_aspera`, `_galaxy`. `read_run` has `fastq`, `submitted`, `sra`, `bam`; `analysis` has `generated`, `submitted` |
+| HTTPS on file paths | Works. `https://ftp.sra.ebi.ac.uk/vol1/...` serves the same path as FTP |
+| nf-core/rnaseq samplesheet | Requires four columns, `sample,fastq_1,fastq_2,strandedness`, and rejects a sheet without the last. `auto` is a valid value and makes rnaseq infer it |
+| nf-core/fetchngs input | A plain list of accessions, one per line. Accepts run, experiment, sample, study, GEO and BioSample identifiers |
+| Result ordering | **Not guaranteed and not reproducible.** Six identical `limit=5` requests returned four different row sets, with repeats among them. Consistent with load balancing across backends that disagree, so instability cannot be asserted in a test, only relied on never |
 | `read_run` date search fields | `first_created`, `first_public`, `last_updated` |
 | `offset` | **Rejected**, GET and POST, body `Unsupported param offset` |
 | `sortFields` | **Rejected**, HTTP 400 |
@@ -264,8 +271,9 @@ response formats, `limit`, and field selection.
   `submitted_ftp`, `sra_ftp` cleanly, with a helper to choose a source and
   handle runs where generated FASTQs do not exist and only submitted files do.
 - **Tier 2 manifest export:** `to_manifest(fmt=...)` emitting an aria2c input
-  file, a curl script, or an nf-core/fetchngs-compatible samplesheet. This is
-  the handoff to real downloaders and it is what makes tier 3 optional.
+  file, a curl script, an nf-core samplesheet of URLs, or a plain accession
+  list for `nf-core/fetchngs --input`. This is the handoff to real downloaders
+  and it is what makes tier 3 optional.
 
 *Done when:* `related()` turns a study accession into its runs in one call,
 and a search result can be turned into a manifest that aria2c accepts
@@ -407,6 +415,37 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-26, M4.** `filereport()` and `related()` on `PortalClient`, plus
+  `files.py` with `file_urls()` for tier 1 and `to_manifest()` for tier 2 in
+  aria2c, curl and nf-core samplesheet form.
+  The trap: `filereport` takes **one** accession. A comma-separated list comes
+  back as HTTP 200 with zero rows and no error, and a repeated parameter uses
+  only the first, so a sequence is sent as one request each and stacked.
+  Joining would have silently lost data. Rewriting multi-accession into a
+  `search` OR query was rejected: it only works when every accession is of the
+  result's own type, and filereport's whole value is accepting any level.
+  File handling generalised better than the plan assumed. Sources are families
+  keyed by prefix, so `bam` and `generated` fell out for free alongside
+  `fastq`, `submitted` and `sra`. `source="auto"` falls back per row, which is
+  what makes runs with no generated FASTQ resolve to their submitted files.
+  `md5` and `bytes` are read positionally, and a short or missing list yields
+  null rather than another file's checksum.
+  Four manifest formats, not three. "fetchngs-compatible samplesheet" in the
+  plan described two different artefacts: fetchngs' **input**, a plain
+  accession list, and its **output**, a samplesheet of URLs for a downstream
+  pipeline. They close different seams, so both ship. nf-core/rnaseq turned
+  out to require a fourth `strandedness` column and rejects a sheet without
+  one, so `pipeline="rnaseq"` adds it set to `auto`, mirroring fetchngs' own
+  `--nf_core_pipeline`. A three-column sheet alone would not have worked with
+  the most likely downstream target.
+  Acceptance was by fixture tests on the emitted text as the plan specified,
+  since neither aria2c nor nextflow is installed here. A live test closes the
+  gap fixtures cannot: it resolves a real run and checks the URL returns 200
+  with a `content-length` equal to `fastq_bytes`.
+  Also removed the ordering test added in M3. Six identical requests returned
+  four different row sets **with repeats**, so the instability is real but not
+  reproducible and cannot be asserted. The fact is documentation, not a test.
 
 - **2026-09-26, M3.** `portal.py` with `PortalClient.search()` returning a
   Polars DataFrame and `count()`. Result types, return fields and query field
