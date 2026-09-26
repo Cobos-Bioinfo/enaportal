@@ -102,7 +102,7 @@ not need its own throttling.
 
 ## Scope
 
-In scope: the Portal API (`search`, `count`, `filereport`, `links`) and the
+In scope: the Portal API (`search`, `count`, `filereport`, `related`) and the
 Browser API (records by accession as XML, EMBL or FASTA).
 
 On files: `enaportal` resolves download URLs and checksums, and exports
