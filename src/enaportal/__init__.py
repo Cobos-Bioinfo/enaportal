@@ -1,10 +1,45 @@
 """A typed Python client for the ENA Portal and Browser APIs."""
 
-from importlib.metadata import PackageNotFoundError, version
+from enaportal._api import (
+    count,
+    default_client,
+    refresh_schema,
+    results,
+    return_fields,
+    search,
+    search_fields,
+)
+from enaportal._version import __version__
+from enaportal.errors import (
+    ENAConnectionError,
+    ENAError,
+    ENAHTTPError,
+    ENAQueryError,
+    ENARateLimitError,
+    ENASchemaError,
+    ENATimeoutError,
+)
+from enaportal.portal import PortalClient
+from enaportal.schema import Field, Result, SchemaClient
 
-try:
-    __version__ = version("enaportal")
-except PackageNotFoundError:  # running from a source tree without an install
-    __version__ = "0.0.0.dev0"
-
-__all__ = ["__version__"]
+__all__ = [
+    "ENAConnectionError",
+    "ENAError",
+    "ENAHTTPError",
+    "ENAQueryError",
+    "ENARateLimitError",
+    "ENASchemaError",
+    "ENATimeoutError",
+    "Field",
+    "PortalClient",
+    "Result",
+    "SchemaClient",
+    "__version__",
+    "count",
+    "default_client",
+    "refresh_schema",
+    "results",
+    "return_fields",
+    "search",
+    "search_fields",
+]
