@@ -69,6 +69,38 @@ def count(
     )
 
 
+def filereport(
+    accession: str | Sequence[str],
+    *,
+    result: str = "read_run",
+    fields: Sequence[str] | None = None,
+    limit: int | None = None,
+    format: Format = "tsv",
+    validate: bool = True,
+) -> pl.DataFrame:
+    """Everything ENA holds for an accession, including its file locations."""
+    return default_client().filereport(
+        accession,
+        result=result,
+        fields=fields,
+        limit=limit,
+        format=format,
+        validate=validate,
+    )
+
+
+def related(
+    accession: str,
+    *,
+    to: str = "read_run",
+    fields: Sequence[str] | None = None,
+    limit: int | None = None,
+    validate: bool = True,
+) -> pl.DataFrame:
+    """Navigate from one accession to the objects related to it."""
+    return default_client().related(accession, to=to, fields=fields, limit=limit, validate=validate)
+
+
 def results() -> list[Result]:
     """Every result type ENA exposes."""
     return default_client().results()
@@ -92,7 +124,9 @@ def refresh_schema(result: str | None = None) -> None:
 __all__ = [
     "count",
     "default_client",
+    "filereport",
     "refresh_schema",
+    "related",
     "results",
     "return_fields",
     "search",
