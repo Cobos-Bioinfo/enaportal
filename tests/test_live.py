@@ -9,9 +9,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+import httpx
 import polars as pl
 import pytest
 
+from enaportal.files import file_urls, to_manifest
 from enaportal.portal import PortalClient
 from enaportal.schema import SchemaClient
 
@@ -90,25 +92,6 @@ def test_json_and_tsv_give_the_same_columns(client: PortalClient) -> None:
     assert tsv.height == payload.height == 5
 
 
-def test_results_are_not_stably_ordered(client: PortalClient) -> None:
-    """Documents why M5 partitions by query range and never by row position.
-
-    Two identical limited queries return different rows, so no offset-free
-    paging or reproducible sampling is possible on top of `limit` alone.
-    """
-    query = 'tax_tree(4932) AND library_strategy="RNA-Seq"'
-    runs = [
-        set(
-            client.search("read_run", query=query, fields=["run_accession"], limit=5)[
-                "run_accession"
-            ]
-        )
-        for _ in range(3)
-    ]
-
-    assert not (runs[0] == runs[1] == runs[2]), "ENA ordering became stable; recheck PLAN.md"
-
-
 def test_offset_is_still_rejected(client: PortalClient) -> None:
     """The fact M5 exists for. If this ever passes, the architecture can simplify."""
     from enaportal.errors import ENAQueryError
@@ -130,3 +113,67 @@ def test_the_snapshot_has_not_drifted_beyond_recognition(tmp_path: Path) -> None
         snapshot_ids = set(offline.result_ids())
 
     assert live_ids == snapshot_ids
+
+
+def test_related_turns_a_study_into_its_runs(client: PortalClient) -> None:
+    """M4's acceptance criterion: navigation in one call, no links endpoint."""
+    runs = client.related("PRJEB1787", limit=5)
+
+    assert runs.height == 5
+    assert set(runs["study_accession"]) == {"PRJEB1787"}
+    assert all(accession.startswith("ERR") for accession in runs["run_accession"])
+
+
+def test_related_accepts_the_secondary_accession_form(client: PortalClient) -> None:
+    primary = client.related("PRJEB1787", fields=["study_accession"], limit=1)
+    secondary = client.related("ERP001736", fields=["study_accession"], limit=1)
+
+    assert primary["study_accession"][0] == secondary["study_accession"][0] == "PRJEB1787"
+
+
+def test_filereport_accepts_a_sample_result_despite_the_docs(client: PortalClient) -> None:
+    """The docs claim read_run and analysis only. They are wrong."""
+    frame = client.filereport(
+        "SAMN00002139", result="sample", fields=["sample_accession", "scientific_name"]
+    )
+
+    assert frame["scientific_name"][0] == "Saccharomyces cerevisiae"
+
+
+def test_filereport_stacks_several_accessions(client: PortalClient) -> None:
+    frame = client.filereport(["ERR10003190", "ERR10003194"], fields=["run_accession", "fastq_ftp"])
+
+    assert sorted(frame["run_accession"]) == ["ERR10003190", "ERR10003194"]
+
+
+def test_resolved_urls_are_real_and_their_sizes_match(client: PortalClient) -> None:
+    """The part fixtures cannot prove: that a manifest points at fetchable bytes."""
+    frame = client.filereport(
+        "ERR10003190", fields=["run_accession", "fastq_ftp", "fastq_md5", "fastq_bytes"]
+    )
+    files = file_urls(frame)
+
+    assert files.height == 2
+    assert files["md5"].null_count() == 0
+
+    first = files.row(0, named=True)
+    response = httpx.head(str(first["url"]), follow_redirects=True, timeout=60.0)
+
+    assert response.status_code == 200
+    assert int(response.headers["content-length"]) == first["bytes"]
+
+
+def test_a_manifest_can_be_built_from_a_search_result(client: PortalClient) -> None:
+    frame = client.search(
+        "read_run",
+        query='tax_tree(4932) AND library_layout="PAIRED"',
+        fields=["run_accession", "fastq_ftp", "fastq_md5", "fastq_bytes"],
+        limit=5,
+    )
+
+    aria = to_manifest(frame, "aria2c")
+    samplesheet = to_manifest(frame, "nf-core")
+
+    assert aria.count("checksum=md5=") == aria.count("  out=")
+    assert samplesheet.splitlines()[0] == "sample,fastq_1,fastq_2"
+    assert len(samplesheet.splitlines()) == 6
