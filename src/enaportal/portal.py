@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import json
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal
@@ -19,6 +19,9 @@ import polars as pl
 from enaportal._http import DEFAULT_TIMEOUT, PORTAL_BASE_URL, ENAHTTPClient, Params, ResponseShape
 from enaportal._query import extract_field_names
 from enaportal._tsv import read_ena_tsv
+from enaportal.bulk import DEFAULT_CONCURRENCY, DEFAULT_THRESHOLD, BulkPlan, Partition
+from enaportal.bulk import bulk_search as _bulk_search
+from enaportal.bulk import plan_partitions as _plan_partitions
 from enaportal.errors import ENAQueryError
 from enaportal.schema import DEFAULT_TTL_SECONDS, Field, Result, SchemaClient
 
@@ -192,6 +195,61 @@ class PortalClient:
                 handle.write(b"\n")
                 written += 1
         return max(written - 1, 0)
+
+    def bulk_search(
+        self,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        threshold: int = DEFAULT_THRESHOLD,
+        partition_field: str | None = None,
+        checkpoint_dir: Path | str | None = None,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        resume: bool = True,
+        validate: bool = True,
+        on_partition: Callable[[Partition], None] | None = None,
+    ) -> pl.DataFrame:
+        """Fetch a whole result set in resumable, checkpointed pieces.
+
+        ENA has no cursor, so this partitions the query by date range instead,
+        counts each range before fetching it and writes every part to disk. A
+        run that is killed resumes without refetching what already landed.
+        """
+        return _bulk_search(
+            self,
+            result,
+            query=query,
+            fields=fields,
+            threshold=threshold,
+            partition_field=partition_field,
+            checkpoint_dir=checkpoint_dir,
+            concurrency=concurrency,
+            resume=resume,
+            validate=validate,
+            on_partition=on_partition,
+        )
+
+    def plan_partitions(
+        self,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        threshold: int = DEFAULT_THRESHOLD,
+        partition_field: str | None = None,
+        validate: bool = True,
+    ) -> BulkPlan:
+        """How bulk_search would split this query, without fetching any rows."""
+        return _plan_partitions(
+            self,
+            result,
+            query=query,
+            fields=fields,
+            threshold=threshold,
+            partition_field=partition_field,
+            validate=validate,
+        )
 
     def filereport(
         self,
