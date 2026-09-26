@@ -1,0 +1,107 @@
+[
+ {
+  "description": "Analyses",
+  "lastUpdated": "2026-09-25 18:00",
+  "primaryAccessionType": "analysis_accession",
+  "recordCount": "26065245",
+  "resultId": "analysis"
+ },
+ {
+  "description": "Genome assemblies",
+  "lastUpdated": "2026-09-26 00:00",
+  "primaryAccessionType": "accession",
+  "recordCount": "5901161",
+  "resultId": "assembly"
+ },
+ {
+  "description": "Coding sequences",
+  "lastUpdated": "2026-08-16 09:00",
+  "primaryAccessionType": "accession",
+  "recordCount": "9539329162",
+  "resultId": "coding"
+ },
+ {
+  "description": "Non-coding sequences",
+  "lastUpdated": "2026-09-23 20:05",
+  "primaryAccessionType": "accession",
+  "recordCount": "339378223",
+  "resultId": "noncoding"
+ },
+ {
+  "description": "Nucleotide sequences",
+  "lastUpdated": "2026-09-25 22:05",
+  "primaryAccessionType": "accession",
+  "recordCount": "318002556",
+  "resultId": "sequence"
+ },
+ {
+  "description": "Experiments",
+  "lastUpdated": "2026-09-25 16:00",
+  "primaryAccessionType": "experiment_accession,run_accession",
+  "recordCount": "44616906",
+  "resultId": "read_experiment"
+ },
+ {
+  "description": "Raw reads",
+  "lastUpdated": "2026-09-25 16:00",
+  "primaryAccessionType": "run_accession",
+  "recordCount": "44616906",
+  "resultId": "read_run"
+ },
+ {
+  "description": "Samples",
+  "lastUpdated": "2026-09-25 20:00",
+  "primaryAccessionType": "sample_accession",
+  "recordCount": "59963751",
+  "resultId": "sample"
+ },
+ {
+  "description": "Studies used for sequence analyses",
+  "lastUpdated": "2026-09-25 18:00",
+  "primaryAccessionType": "study_accession,analysis_accession",
+  "recordCount": "26065245",
+  "resultId": "analysis_study"
+ },
+ {
+  "description": "Studies used for raw reads",
+  "lastUpdated": "2026-09-25 16:00",
+  "primaryAccessionType": "study_accession,run_accession",
+  "recordCount": "44616906",
+  "resultId": "read_study"
+ },
+ {
+  "description": "Studies",
+  "lastUpdated": "2026-09-26 00:55",
+  "primaryAccessionType": "study_accession",
+  "recordCount": "1100763",
+  "resultId": "study"
+ },
+ {
+  "description": "Taxonomic classification",
+  "lastUpdated": "2026-09-26 00:15",
+  "primaryAccessionType": "tax_id",
+  "recordCount": "3467708",
+  "resultId": "taxon"
+ },
+ {
+  "description": "Targeted locus study contig sets (TLS)",
+  "lastUpdated": "2026-09-25 22:22",
+  "primaryAccessionType": "accession",
+  "recordCount": "4669",
+  "resultId": "tls_set"
+ },
+ {
+  "description": "Transcriptome assembly contig sets (TSA)",
+  "lastUpdated": "2026-09-25 20:30",
+  "primaryAccessionType": "accession",
+  "recordCount": "10719",
+  "resultId": "tsa_set"
+ },
+ {
+  "description": "Genome assembly contig set (WGS)",
+  "lastUpdated": "2026-09-26 01:51",
+  "primaryAccessionType": "accession",
+  "recordCount": "5467736",
+  "resultId": "wgs_set"
+ }
+]
