@@ -15,7 +15,11 @@ import polars as pl
 from enaportal.errors import ENAQueryError
 
 Protocol = Literal["https", "ftp"]
-ManifestFormat = Literal["aria2c", "curl", "nf-core"]
+ManifestFormat = Literal["aria2c", "curl", "nf-core", "accessions"]
+
+# nf-core samplesheets vary by downstream pipeline, which is why fetchngs has
+# its own --nf_core_pipeline flag. Only rnaseq's extra column is known here.
+SamplesheetPipeline = Literal["rnaseq"]
 
 AUTO: Final = "auto"
 
@@ -26,6 +30,7 @@ AUTO: Final = "auto"
 SOURCE_ORDER: Final = ("fastq", "generated", "submitted", "sra", "bam")
 
 _ACCESSION_COLUMNS: Final = (
+    "accession",
     "run_accession",
     "analysis_accession",
     "experiment_accession",
@@ -87,12 +92,24 @@ def to_manifest(
     source: str = AUTO,
     protocol: Protocol = "https",
     directory: str | None = None,
+    pipeline: SamplesheetPipeline | None = None,
 ) -> str:
     """Render file locations as input for a tool that does the transfer.
 
     Accepts either a search or filereport frame, which it resolves first, or a
     frame already returned by file_urls.
+
+    The formats close two different seams. aria2c, curl and nf-core hand over
+    resolved URLs, so the transfer happens outside any pipeline. accessions
+    hands the whole job to nf-core/fetchngs instead, which does retries, Aspera
+    and metadata harmonisation better than a URL list can.
+
+    pipeline applies to nf-core only, and mirrors fetchngs' --nf_core_pipeline:
+    rnaseq needs a strandedness column and rejects a samplesheet without one.
     """
+    if fmt == "accessions":
+        return _accessions(frame)
+
     resolved = (
         frame
         if {"url", "filename"} <= set(frame.columns)
@@ -103,8 +120,8 @@ def to_manifest(
     if fmt == "curl":
         return _curl(resolved, directory)
     if fmt == "nf-core":
-        return _nf_core(resolved)
-    raise ValueError(f"Unknown manifest format: {fmt!r}. Use aria2c, curl or nf-core.")
+        return _nf_core(resolved, pipeline)
+    raise ValueError(f"Unknown manifest format: {fmt!r}. Use aria2c, curl, nf-core or accessions.")
 
 
 def _unpack(frame: pl.DataFrame, name: str, accession: str, protocol: Protocol) -> pl.DataFrame:
@@ -206,12 +223,35 @@ def _curl(frame: pl.DataFrame, directory: str | None) -> str:
     return _joined(lines)
 
 
-def _nf_core(frame: pl.DataFrame) -> str:
-    lines = ["sample,fastq_1,fastq_2"]
+def _nf_core(frame: pl.DataFrame, pipeline: SamplesheetPipeline | None) -> str:
+    if pipeline is not None and pipeline != "rnaseq":
+        raise ValueError(
+            f"Unknown samplesheet pipeline: {pipeline!r}. Only 'rnaseq' has a known extra "
+            "column; leave pipeline out for the neutral sample,fastq_1,fastq_2 header."
+        )
+    # rnaseq requires strandedness and rejects a sheet without it. "auto" makes
+    # it infer by subsampling, which beats guessing on the archive's behalf.
+    extra = ["auto"] if pipeline == "rnaseq" else []
+    header = ["sample", "fastq_1", "fastq_2", *(["strandedness"] if extra else [])]
+
+    lines = [",".join(header)]
     for accession, files in _by_accession(frame):
         first, second = _mates(files)
-        lines.append(f"{accession},{first},{second}")
+        lines.append(",".join([accession, first, second, *extra]))
     return _joined(lines)
+
+
+def _accessions(frame: pl.DataFrame) -> str:
+    """One accession per line, which is what fetchngs takes as --input.
+
+    Deduplicated, because a resolved frame has one row per file and a paired
+    run would otherwise appear twice.
+    """
+    if frame.is_empty():
+        return ""
+    column = _accession_column(frame)
+    values = frame[column].drop_nulls().unique(maintain_order=True).to_list()
+    return _joined([str(value) for value in values if str(value)])
 
 
 def _by_accession(frame: pl.DataFrame) -> Iterable[tuple[str, list[dict[str, object]]]]:
@@ -246,4 +286,11 @@ def _joined(lines: Sequence[str]) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
-__all__ = ["SOURCE_ORDER", "ManifestFormat", "Protocol", "file_urls", "to_manifest"]
+__all__ = [
+    "SOURCE_ORDER",
+    "ManifestFormat",
+    "Protocol",
+    "SamplesheetPipeline",
+    "file_urls",
+    "to_manifest",
+]

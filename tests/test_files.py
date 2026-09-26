@@ -234,6 +234,41 @@ def test_a_manifest_accepts_an_already_resolved_frame(runs: pl.DataFrame) -> Non
     assert to_manifest(file_urls(runs), "aria2c") == to_manifest(runs, "aria2c")
 
 
+def test_nf_core_rnaseq_adds_the_strandedness_column(runs: pl.DataFrame) -> None:
+    """rnaseq requires four columns and rejects a samplesheet with three."""
+    sheet = to_manifest(runs, "nf-core", pipeline="rnaseq")
+
+    assert sheet.splitlines()[0] == "sample,fastq_1,fastq_2,strandedness"
+    assert all(line.endswith(",auto") for line in sheet.splitlines()[1:])
+
+
+def test_nf_core_leaves_strandedness_out_by_default(runs: pl.DataFrame) -> None:
+    assert "strandedness" not in to_manifest(runs, "nf-core")
+
+
+def test_an_unknown_pipeline_is_rejected(runs: pl.DataFrame) -> None:
+    with pytest.raises(ValueError, match="Unknown samplesheet pipeline"):
+        to_manifest(runs, "nf-core", pipeline="sarek")  # type: ignore[arg-type]
+
+
+def test_accessions_manifest_is_one_per_line(runs: pl.DataFrame) -> None:
+    assert to_manifest(runs, "accessions") == "ERR1\nERR2\nERR3\n"
+
+
+def test_accessions_deduplicates_a_resolved_frame(runs: pl.DataFrame) -> None:
+    """A paired run is two rows once resolved, but still one accession."""
+    assert to_manifest(file_urls(runs), "accessions") == "ERR1\nERR2\nERR3\n"
+
+
+def test_accessions_needs_no_file_columns() -> None:
+    """The point of this format is handing discovery off before resolving files."""
+    assert to_manifest(frame(run_accession=["ERR9", "ERR8"]), "accessions") == "ERR9\nERR8\n"
+
+
+def test_accessions_on_an_empty_frame() -> None:
+    assert to_manifest(pl.DataFrame(), "accessions") == ""
+
+
 def test_an_unknown_format_is_rejected(runs: pl.DataFrame) -> None:
     with pytest.raises(ValueError, match="Unknown manifest format"):
         to_manifest(runs, "wget")  # type: ignore[arg-type]

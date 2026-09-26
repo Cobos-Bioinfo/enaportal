@@ -174,6 +174,8 @@ re-probe as a matter of course.
 | `filereport` `limit` | Accepted, and behaves as on `search` |
 | File source families | Columns come in families `{prefix}_ftp`, `_md5`, `_bytes`, `_aspera`, `_galaxy`. `read_run` has `fastq`, `submitted`, `sra`, `bam`; `analysis` has `generated`, `submitted` |
 | HTTPS on file paths | Works. `https://ftp.sra.ebi.ac.uk/vol1/...` serves the same path as FTP |
+| nf-core/rnaseq samplesheet | Requires four columns, `sample,fastq_1,fastq_2,strandedness`, and rejects a sheet without the last. `auto` is a valid value and makes rnaseq infer it |
+| nf-core/fetchngs input | A plain list of accessions, one per line. Accepts run, experiment, sample, study, GEO and BioSample identifiers |
 | Result ordering | **Not guaranteed and not reproducible.** Six identical `limit=5` requests returned four different row sets, with repeats among them. Consistent with load balancing across backends that disagree, so instability cannot be asserted in a test, only relied on never |
 | `read_run` date search fields | `first_created`, `first_public`, `last_updated` |
 | `offset` | **Rejected**, GET and POST, body `Unsupported param offset` |
@@ -269,8 +271,9 @@ response formats, `limit`, and field selection.
   `submitted_ftp`, `sra_ftp` cleanly, with a helper to choose a source and
   handle runs where generated FASTQs do not exist and only submitted files do.
 - **Tier 2 manifest export:** `to_manifest(fmt=...)` emitting an aria2c input
-  file, a curl script, or an nf-core/fetchngs-compatible samplesheet. This is
-  the handoff to real downloaders and it is what makes tier 3 optional.
+  file, a curl script, an nf-core samplesheet of URLs, or a plain accession
+  list for `nf-core/fetchngs --input`. This is the handoff to real downloaders
+  and it is what makes tier 3 optional.
 
 *Done when:* `related()` turns a study accession into its runs in one call,
 and a search result can be turned into a manifest that aria2c accepts
@@ -428,6 +431,14 @@ surprising that a later session would otherwise rediscover the hard way.
   what makes runs with no generated FASTQ resolve to their submitted files.
   `md5` and `bytes` are read positionally, and a short or missing list yields
   null rather than another file's checksum.
+  Four manifest formats, not three. "fetchngs-compatible samplesheet" in the
+  plan described two different artefacts: fetchngs' **input**, a plain
+  accession list, and its **output**, a samplesheet of URLs for a downstream
+  pipeline. They close different seams, so both ship. nf-core/rnaseq turned
+  out to require a fourth `strandedness` column and rejects a sheet without
+  one, so `pipeline="rnaseq"` adds it set to `auto`, mirroring fetchngs' own
+  `--nf_core_pipeline`. A three-column sheet alone would not have worked with
+  the most likely downstream target.
   Acceptance was by fixture tests on the emitted text as the plan specified,
   since neither aria2c nor nextflow is installed here. A live test closes the
   gap fixtures cannot: it resolves a real run and checks the URL returns 200

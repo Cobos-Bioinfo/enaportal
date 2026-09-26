@@ -172,8 +172,10 @@ def test_a_manifest_can_be_built_from_a_search_result(client: PortalClient) -> N
     )
 
     aria = to_manifest(frame, "aria2c")
-    samplesheet = to_manifest(frame, "nf-core")
+    samplesheet = to_manifest(frame, "nf-core", pipeline="rnaseq")
+    accessions = to_manifest(frame, "accessions")
 
     assert aria.count("checksum=md5=") == aria.count("  out=")
-    assert samplesheet.splitlines()[0] == "sample,fastq_1,fastq_2"
+    assert samplesheet.splitlines()[0] == "sample,fastq_1,fastq_2,strandedness"
     assert len(samplesheet.splitlines()) == 6
+    assert len(accessions.splitlines()) == 5
