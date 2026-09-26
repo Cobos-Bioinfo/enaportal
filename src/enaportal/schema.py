@@ -129,6 +129,18 @@ class SchemaClient:
         """Searchable date fields, which are M5's preferred partition keys."""
         return [field for field in self.search_fields(result) if field.is_date]
 
+    def link_fields(self, result: str) -> list[Field]:
+        """The fields that point at another ENA object.
+
+        Portal rows are denormalised, so these are what makes navigation a
+        query rather than a request to an endpoint that does not exist.
+        """
+        return [
+            field
+            for field in self.return_fields(result)
+            if field.column_id.endswith("_accession") or field.column_id == "tax_id"
+        ]
+
     def refresh(self, result: str | None = None) -> None:
         """Discard cached schema and read it from ENA again.
 
