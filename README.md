@@ -53,6 +53,10 @@ frame = enaportal.search(
 )
 ```
 
+ENA applies no default limit, so leaving `limit` out returns the whole result
+set. That is one long download with no way to resume it, which is the problem
+resumable retrieval exists to solve. Pass an explicit `limit` until it lands.
+
 `search` returns a Polars DataFrame. Every column is a string: ENA packs
 multiple values into one cell with semicolons, so inferring types would give
 the same field a different dtype from one query to the next. Cast explicitly

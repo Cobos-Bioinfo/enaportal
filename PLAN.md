@@ -106,6 +106,31 @@ documents it; `pysradb` implements tier 3.
 
 ---
 
+## Reference documentation
+
+ENA has no OpenAPI spec, so these pages are the reference. Read them before
+guessing, but trust the table below over them: several statements on these
+pages are already contradicted by the live API, and each contradiction is
+recorded as its own row.
+
+| Page | URL |
+|---|---|
+| Programmatic access, index and rate limits | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access.html> |
+| File reports, the `filereport` endpoint | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/file-reports.html> |
+| Advanced search, the query grammar | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/advanced-search.html> |
+| Browser API | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/browser-api.html> |
+| Cross references | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/cross-reference.html> |
+| Taxon API | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/taxon-api.html> |
+| File download, FTP layout and Aspera | <https://ena-docs.readthedocs.io/en/latest/retrieval/file-download.html> |
+| Portal API reference | <https://www.ebi.ac.uk/ena/portal/api/doc>, a 302 to a Google Doc that is not machine readable |
+| Browser API reference | <https://www.ebi.ac.uk/ena/browser/api/doc> |
+
+**Where the docs are wrong.** They say `filereport` accepts only `read_run` and
+`analysis`, and that `limit` defaults to 100,000. Neither holds. Assume any
+unverified claim on these pages may be stale.
+
+---
+
 ## Verified API facts
 
 Probed live 2026-09-26. Recheck before assuming any still hold, but do not
@@ -133,6 +158,17 @@ re-probe as a matter of course.
 | Rate limit | **50 requests per second**, documented, across the discovery and retrieval APIs. Excess is rejected with HTTP 429 |
 | Rate-limit headers | None returned, and no documented `Retry-After` |
 | Retired endpoints | `data/warehouse/search`, `data/view`, `data/warehouse/filereport` all 301 to the browser homepage |
+| Omitting `limit` | Returns **everything**, exactly like `limit=0`. The docs claim a default of 100,000; the live API returned all 276,447 rows, 3.2 MB, in 20 s. There is no safe default, so an unbounded `search()` is a footgun that M5 exists to replace |
+| `filereport` | `filereport?accession=&result=&fields=&format=`. **Not** limited to `read_run` and `analysis` as the docs claim: `result=sample` returns sample metadata |
+| Accession and result mismatch | HTTP 400, plain text, and the body lists the accepted accession regexes for that result, e.g. `sample [ ^(SAME[A]?[0-9]{6,})\|(SAM[ND][0-9]{8})$ ]`. Let ENA report this rather than hardcoding prefix tables |
+| Portal 404 body | JSON, Spring Boot shape `{timestamp, status, error, path}`. Different from the plain-text rejections served with 200 |
+| `/links` on the Portal | **Does not exist.** HTTP 404. Cross references come from the Browser API or the separate xref service, see M4 |
+| Multi-value file fields | `;` separated and positionally parallel across `fastq_ftp`, `fastq_md5` and `fastq_bytes`. A single-file run has no separator, and `submitted_ftp` or `sra_ftp` may be empty |
+| File paths | Carry **no URL scheme**: `ftp.sra.ebi.ac.uk/vol1/fastq/ERR100/090/ERR10003190/ERR10003190_1.fastq.gz`. Prepend `ftp://` or `https://` |
+| FTP directory layout | Inconsistent. Older runs are flat, `ERR164/ERR164407`, newer ones are sharded, `ERR100/090/ERR10003190`. **Never construct a path**, always use the field |
+| Submitted files | Keep the submitter's own filenames under `/vol1/run/`, unrelated to the run accession |
+| FTP roots | Reads and analyses `ftp://ftp.sra.ebi.ac.uk/vol1/`, assembled and annotated sequences `ftp://ftp.ebi.ac.uk/pub/databases/ena/` |
+| xref service | `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/...`, and it **does** support `offset` and `limit`. Pagination exists there but not on the Portal |
 
 **The three facts that shape the architecture:** no `offset` and no
 `sortFields` means there is no cursor, so a large result set cannot be resumed
@@ -195,7 +231,14 @@ response formats, `limit`, and field selection.
 
 - `filereport()`: the accession-oriented endpoint most users actually want.
   First-class ergonomics, this is the common path.
-- `links()`: cross-references between studies, samples, runs, analyses.
+- `links()`: **open question, resolve before building.** There is no `links`
+  endpoint on the Portal API, it 404s. Three candidates: the Browser API's
+  `/{format}/links/{study,sample,taxon}`, the separate xref REST service at
+  `https://www.ebi.ac.uk/ena/xref/rest/`, or simply `filereport`, since a study
+  accession already returns its runs with their sample and experiment
+  accessions. The third needs no new endpoint and probably covers the common
+  case; the xref service is about *external* databases, which is a different
+  feature from the one this milestone described. Pick one and record why.
 - **Tier 1 URL resolution:** expose `fastq_ftp`, `fastq_md5`, `fastq_bytes`,
   `submitted_ftp`, `sra_ftp` cleanly, with a helper to choose a source and
   handle runs where generated FASTQs do not exist and only submitted files do.
@@ -232,6 +275,12 @@ refetching completed partitions, proven by a test that does exactly that.
 
 Module `enaportal/browser.py`. Records by accession as XML, EMBL or FASTA.
 Smaller surface than the Portal side, kept separate.
+
+Paths are all `/{format}/...` under `https://www.ebi.ac.uk/ena/browser/api/`:
+`/{format}/{accession}`, `/{format}/textsearch/{query}`,
+`/{format}/search/{query}` and `/{format}/links/{study|sample|taxon}`. XML
+covers study, sample, run, experiment, analysis and taxon; EMBL covers
+sequences, WGS and TSA sets; FASTA covers sequences.
 
 ### M7. CLI
 *Depends on: M3, M4, M6.*

@@ -127,9 +127,10 @@ class PortalClient:
         cell with semicolons, so inferring types would give the same field a
         different dtype from one query to the next; cast explicitly instead.
 
-        limit=0 asks ENA for everything in one response, which for a large query
-        is a single long download with no way to resume it. Prefer fetch_all for
-        those.
+        ENA applies no default limit: omitting it returns the whole result set,
+        exactly like limit=0. For a large query that is one long download with
+        no way to resume it, so pass an explicit limit unless you do want all
+        of it.
         """
         params = self._params(
             result,
