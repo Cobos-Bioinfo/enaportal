@@ -18,8 +18,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M1 HTTP layer | done 2026-09-26 |
 | M2 Introspection and cache | done 2026-09-26 |
 | M3 search and count | done 2026-09-26 |
-| M4 filereport, related, manifests | **next** |
-| M5 Resumable bulk retrieval | not started |
+| M4 filereport, related, manifests | done 2026-09-26 |
+| M5 Resumable bulk retrieval | **next** |
 | M6 Browser API | not started |
 | M7 CLI | not started |
 | M8 Test suite | not started |
@@ -169,7 +169,12 @@ re-probe as a matter of course.
 | Field `type` values | `text`, `number`, `date`, `boolean`, `latlon`, `list`, `taxonomy`, `controlled value`, `indexed`. Wider than first recorded |
 | Missing field `type` | **`type` is absent on 247 of 2845 fields** (40 of 195 `read_run` return fields). The type word sits in `description` instead, e.g. `{"columnId": "run_date", "description": "date"}`. Every untyped description is one of `text`, `number`, `latlon`, `boolean`, `date` |
 | `/count` body | A one-column TSV with a `count` header, not a bare number |
-| Result ordering | **Not stable.** Two identical `limit=5` queries return different rows |
+| `filereport` accessions | **One per request.** A comma-separated list returns zero rows with HTTP 200 and no error, and a repeated `accession` parameter silently uses the first. Loop, never join |
+| `filereport` accession level | Any level ENA can map to the result: study, experiment, sample or run all work for `read_run`, in either the primary or the secondary form |
+| `filereport` `limit` | Accepted, and behaves as on `search` |
+| File source families | Columns come in families `{prefix}_ftp`, `_md5`, `_bytes`, `_aspera`, `_galaxy`. `read_run` has `fastq`, `submitted`, `sra`, `bam`; `analysis` has `generated`, `submitted` |
+| HTTPS on file paths | Works. `https://ftp.sra.ebi.ac.uk/vol1/...` serves the same path as FTP |
+| Result ordering | **Not guaranteed and not reproducible.** Six identical `limit=5` requests returned four different row sets, with repeats among them. Consistent with load balancing across backends that disagree, so instability cannot be asserted in a test, only relied on never |
 | `read_run` date search fields | `first_created`, `first_public`, `last_updated` |
 | `offset` | **Rejected**, GET and POST, body `Unsupported param offset` |
 | `sortFields` | **Rejected**, HTTP 400 |
@@ -407,6 +412,29 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-26, M4.** `filereport()` and `related()` on `PortalClient`, plus
+  `files.py` with `file_urls()` for tier 1 and `to_manifest()` for tier 2 in
+  aria2c, curl and nf-core samplesheet form.
+  The trap: `filereport` takes **one** accession. A comma-separated list comes
+  back as HTTP 200 with zero rows and no error, and a repeated parameter uses
+  only the first, so a sequence is sent as one request each and stacked.
+  Joining would have silently lost data. Rewriting multi-accession into a
+  `search` OR query was rejected: it only works when every accession is of the
+  result's own type, and filereport's whole value is accepting any level.
+  File handling generalised better than the plan assumed. Sources are families
+  keyed by prefix, so `bam` and `generated` fell out for free alongside
+  `fastq`, `submitted` and `sra`. `source="auto"` falls back per row, which is
+  what makes runs with no generated FASTQ resolve to their submitted files.
+  `md5` and `bytes` are read positionally, and a short or missing list yields
+  null rather than another file's checksum.
+  Acceptance was by fixture tests on the emitted text as the plan specified,
+  since neither aria2c nor nextflow is installed here. A live test closes the
+  gap fixtures cannot: it resolves a real run and checks the URL returns 200
+  with a `content-length` equal to `fastq_bytes`.
+  Also removed the ordering test added in M3. Six identical requests returned
+  four different row sets **with repeats**, so the instability is real but not
+  reproducible and cannot be asserted. The fact is documentation, not a test.
 
 - **2026-09-26, M3.** `portal.py` with `PortalClient.search()` returning a
   Polars DataFrame and `count()`. Result types, return fields and query field

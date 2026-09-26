@@ -85,6 +85,44 @@ request. Set `ENAPORTAL_CACHE_DIR` to move the cache, or call
 library falls back to the cache and then to a snapshot shipped in the package,
 warning each time, so it degrades instead of failing.
 
+## Files
+
+`filereport` is the accession-oriented path, and it accepts any level ENA can
+map to the result type, in either accession form:
+
+```python
+runs = enaportal.filereport("PRJEB1787", fields=["run_accession", "fastq_ftp", "fastq_md5"])
+```
+
+`related` navigates between objects. There is no links endpoint on the Portal
+API and none is needed, because the rows already carry their parents:
+
+```python
+enaportal.related("PRJEB1787")  # the study's runs, with sample and experiment
+enaportal.related("SAMEA2620995", to="analysis")
+```
+
+ENA packs a row's files into one cell separated by semicolons, keeps the
+checksums and sizes positionally parallel, and serves paths with no URL
+scheme. `file_urls` unpacks all of that into one row per file:
+
+```python
+enaportal.file_urls(runs)
+# accession  source  file_index  filename              url  md5  bytes
+```
+
+It falls back per row through `fastq`, `generated`, `submitted`, `sra` and
+`bam`, so runs that have no generated FASTQ resolve to their submitted files
+instead. Pass `source="submitted"` to pin one.
+
+`to_manifest` hands the result to a tool that does transfers properly:
+
+```python
+enaportal.to_manifest(runs, "aria2c", directory="/data")  # aria2c -i
+enaportal.to_manifest(runs, "curl")  # a resumable sh script
+enaportal.to_manifest(runs, "nf-core")  # sample,fastq_1,fastq_2
+```
+
 For repeated work, hold a client so the connection pool and schema cache are
 reused:
 
