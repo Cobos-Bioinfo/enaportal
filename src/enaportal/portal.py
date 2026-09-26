@@ -152,6 +152,47 @@ class PortalClient:
             return _frame_from_records(self._request_json("search", params))
         return self._read_tsv("search", params)
 
+    def search_to_file(
+        self,
+        path: Path | str,
+        result: str,
+        *,
+        query: str | None = None,
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        data_portal: str | None = None,
+        include_metagenomes: bool | None = None,
+        validate: bool = True,
+    ) -> int:
+        """Stream a query straight to a TSV file, returning the rows written.
+
+        Memory stays flat however large the result set is, which is what makes
+        it the right shape for a bulk checkpoint. TSV only: it is the format
+        ENA streams, and the one that can be concatenated afterwards.
+        """
+        params = self._params(
+            result,
+            query=query,
+            data_portal=data_portal,
+            include_metagenomes=include_metagenomes,
+            validate=validate,
+        )
+        if fields:
+            if validate:
+                self.schema.validate_return_fields(result, fields)
+            params["fields"] = ",".join(fields)
+        if limit is not None:
+            params["limit"] = limit
+        params["format"] = "tsv"
+
+        written = 0
+        with Path(path).open("wb") as handle:
+            for line in self._stream("search", params):
+                handle.write(line.encode("utf-8"))
+                handle.write(b"\n")
+                written += 1
+        return max(written - 1, 0)
+
     def filereport(
         self,
         accession: str | Sequence[str],
