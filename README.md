@@ -43,11 +43,16 @@ runtime and caches it, and a scheduled CI job tells us when that schema moves.
 In scope: the Portal API (`search`, `count`, `filereport`, `links`) and the
 Browser API (records by accession as XML, EMBL or FASTA).
 
-Out of scope, deliberately: bulk FASTQ downloading, which
-[enaBrowserTools](https://github.com/enasequence/enaBrowserTools) and
-[nf-core/fetchngs](https://nf-co.re/fetchngs) already do well, and data
-submission, which [ena-upload-cli](https://github.com/usegalaxy-eu/ena-upload-cli)
-covers.
+On files: `enaportal` resolves download URLs and checksums, and exports
+manifests that `aria2c`, `curl` or
+[nf-core/fetchngs](https://nf-co.re/fetchngs) can consume. Getting the URLs is
+the easy part; moving terabytes reliably is a different problem, and
+[enaBrowserTools](https://github.com/enasequence/enaBrowserTools) already
+solves it. A modest HTTP downloader with resume and MD5 verification is planned
+for v0.2.
+
+Out of scope, deliberately: bulk and Aspera transfer, and data submission,
+which [ena-upload-cli](https://github.com/usegalaxy-eu/ena-upload-cli) covers.
 
 ## Installation
 
