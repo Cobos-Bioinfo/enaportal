@@ -51,7 +51,9 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+# The `not live` filter is what actually keeps the default run offline; the
+# marker alone does not exclude anything. `pytest -m live` overrides it.
+addopts = "-q --strict-markers -m 'not live'"
 markers = [
     # Tests that hit the live ENA API. Excluded from the default run; the
     # scheduled schema-drift workflow runs them with `-m live`.
