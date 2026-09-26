@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import random
 import re
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -51,6 +52,11 @@ RATE_LIMIT_PER_SECOND = 50
 RATE_LIMIT_MIN_BACKOFF = 1.0
 MAX_RETRY_AFTER = 60.0
 
+# Half the documented budget. The limit is per source address and this client
+# cannot see what else is using it, so spending all of it invites a 429 caused
+# by somebody else's traffic.
+DEFAULT_RATE_LIMIT = RATE_LIMIT_PER_SECOND / 2
+
 ParamValue = str | int | float | bool | None
 Params = Mapping[str, ParamValue]
 
@@ -85,11 +91,42 @@ def sniff_text_error(first_line: str, shape: ResponseShape) -> str | None:
     return stripped if _ERROR_OPENINGS.match(stripped) else None
 
 
+class RateLimiter:
+    """Spaces request starts so no one second window can exceed a given rate.
+
+    A token bucket sized to the rate would still allow a full bucket followed
+    by a refilled one, twice the rate across a window straddling the two, so
+    this spaces requests evenly instead. Shared by every thread of one client,
+    which is what keeps the bisect loop and the partition fetches inside a
+    single budget rather than two.
+    """
+
+    def __init__(self, rate: float, *, sleep: Callable[[float], None] = time.sleep) -> None:
+        if rate <= 0:
+            raise ValueError("rate must be positive")
+        self.rate = rate
+        self._interval = 1.0 / rate
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def acquire(self) -> None:
+        """Block until the caller may send, then claim the slot."""
+        with self._lock:
+            now = time.monotonic()
+            start = max(now, self._next)
+            self._next = start + self._interval
+        delay = start - now
+        if delay > 0:
+            self._sleep(delay)
+
+
 class ENAHTTPClient:
     """An httpx client configured for ENA.
 
     Retries connection failures and 5xx with exponential backoff, never retries
-    4xx, and turns ENA's HTTP 200 text rejections into ENAQueryError.
+    4xx, turns ENA's HTTP 200 text rejections into ENAQueryError, and holds the
+    whole client to a request rate ENA will accept.
     """
 
     def __init__(
@@ -100,6 +137,7 @@ class ENAHTTPClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         user_agent: str = USER_AGENT,
+        rate_limit: float | None = DEFAULT_RATE_LIMIT,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if max_retries < 0:
@@ -107,6 +145,7 @@ class ENAHTTPClient:
         self.base_url = base_url
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+        self.limiter = RateLimiter(rate_limit, sleep=sleep) if rate_limit else None
         self._sleep = sleep
         self._client = httpx.Client(
             base_url=base_url,
@@ -228,6 +267,8 @@ class ENAHTTPClient:
         for attempt in range(self.max_retries + 1):
             if attempt:
                 self._sleep(delay)
+            if self.limiter is not None:
+                self.limiter.acquire()
             try:
                 response = self._client.send(request, stream=stream)
             except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:

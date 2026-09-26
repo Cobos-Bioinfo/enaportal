@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from enaportal._http import (
     PORTAL_BASE_URL,
     RATE_LIMIT_MIN_BACKOFF,
     ENAHTTPClient,
+    RateLimiter,
     sniff_text_error,
 )
 from enaportal.errors import (
@@ -32,9 +34,15 @@ def slept() -> list[float]:
     return []
 
 
+def _unthrottled(*, max_retries: int, sleep: Callable[[float], None]) -> ENAHTTPClient:
+    """A client whose only sleeps are backoff, so `slept` measures just that."""
+    return ENAHTTPClient(max_retries=max_retries, backoff_factor=0.0, rate_limit=None, sleep=sleep)
+
+
 @pytest.fixture
 def client(slept: list[float]) -> Iterator[ENAHTTPClient]:
-    with ENAHTTPClient(backoff_factor=0.0, sleep=slept.append) as client:
+    """Throttling off, so `slept` records backoff delays and nothing else."""
+    with ENAHTTPClient(backoff_factor=0.0, rate_limit=None, sleep=slept.append) as client:
         yield client
 
 
@@ -85,7 +93,7 @@ def test_gives_up_after_max_retries(slept: list[float]) -> None:
     route = respx.get(COUNT_URL).mock(return_value=httpx.Response(502, text="bad gateway"))
 
     with (
-        ENAHTTPClient(max_retries=2, backoff_factor=0.0, sleep=slept.append) as client,
+        _unthrottled(max_retries=2, sleep=slept.append) as client,
         pytest.raises(ENAHTTPError) as caught,
     ):
         client.get_text("count")
@@ -178,7 +186,7 @@ def test_persistent_429_raises_a_rate_limit_error(slept: list[float]) -> None:
     route = respx.get(COUNT_URL).mock(return_value=httpx.Response(429, text="Too Many Requests"))
 
     with (
-        ENAHTTPClient(max_retries=2, backoff_factor=0.0, sleep=slept.append) as client,
+        _unthrottled(max_retries=2, sleep=slept.append) as client,
         pytest.raises(ENARateLimitError) as caught,
     ):
         client.get_text("count")
@@ -193,7 +201,7 @@ def test_a_rate_limit_error_is_still_an_http_error(slept: list[float]) -> None:
     respx.get(COUNT_URL).mock(return_value=httpx.Response(429))
 
     with (
-        ENAHTTPClient(max_retries=0, sleep=slept.append) as client,
+        _unthrottled(max_retries=0, sleep=slept.append) as client,
         pytest.raises(ENAHTTPError),
     ):
         client.get_text("count")
@@ -226,7 +234,7 @@ def test_connection_error_after_retries(slept: list[float]) -> None:
     respx.get(COUNT_URL).mock(side_effect=httpx.ConnectError("no route to host"))
 
     with (
-        ENAHTTPClient(max_retries=1, backoff_factor=0.0, sleep=slept.append) as client,
+        _unthrottled(max_retries=1, sleep=slept.append) as client,
         pytest.raises(ENAConnectionError),
     ):
         client.get_text("count")
@@ -340,3 +348,76 @@ def test_sniffer_flags_ena_rejections(body: str) -> None:
 )
 def test_sniffer_passes_real_payloads(body: str) -> None:
     assert sniff_text_error(body, "tsv") is None
+
+
+def test_the_limiter_does_not_delay_a_lone_request() -> None:
+    slept: list[float] = []
+    limiter = RateLimiter(10.0, sleep=slept.append)
+
+    limiter.acquire()
+
+    assert slept == []
+
+
+def test_the_limiter_claims_one_slot_per_interval() -> None:
+    """The sleep here is a no-op, so each call asks to wait one interval more."""
+    slept: list[float] = []
+    limiter = RateLimiter(50.0, sleep=slept.append)
+
+    for _ in range(4):
+        limiter.acquire()
+
+    assert len(slept) == 3
+    assert slept == sorted(slept)
+    assert slept[-1] == pytest.approx(3 * 0.02, abs=0.005)
+
+
+def test_the_limiter_holds_real_time_to_the_rate() -> None:
+    """A token bucket would allow a full bucket plus a refill; spacing does not."""
+    limiter = RateLimiter(200.0)
+
+    started = time.monotonic()
+    for _ in range(10):
+        limiter.acquire()
+    elapsed = time.monotonic() - started
+
+    assert elapsed >= 9 / 200.0
+
+
+def test_the_limiter_rejects_a_rate_of_zero() -> None:
+    with pytest.raises(ValueError, match="rate must be positive"):
+        RateLimiter(0.0)
+
+
+@respx.mock
+def test_every_request_passes_through_the_limiter() -> None:
+    """Counting during a bisect and fetching partitions share one budget."""
+    slept: list[float] = []
+    respx.get(COUNT_URL).mock(return_value=httpx.Response(200, text="1"))
+
+    with ENAHTTPClient(rate_limit=50.0, sleep=slept.append) as client:
+        for _ in range(3):
+            client.get_text("count")
+
+    assert len(slept) == 2
+
+
+@respx.mock
+def test_a_retry_is_throttled_like_any_other_request() -> None:
+    slept: list[float] = []
+    respx.get(COUNT_URL).mock(
+        side_effect=[httpx.Response(500), httpx.Response(200, text="1")],
+    )
+
+    with ENAHTTPClient(max_retries=1, backoff_factor=0.0, rate_limit=50.0, sleep=slept.append) as (
+        client
+    ):
+        assert client.get_text("count") == "1"
+
+    # The backoff of 0.0, then the limiter holding the retry off the wire.
+    assert len(slept) == 2
+
+
+def test_rate_limiting_can_be_turned_off() -> None:
+    with ENAHTTPClient(rate_limit=None) as client:
+        assert client.limiter is None
