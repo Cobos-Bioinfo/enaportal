@@ -15,10 +15,10 @@ infrastructure for a wider portfolio, not its centrepiece.
 | Milestone | State |
 |---|---|
 | M0 Scaffolding | done 2026-09-26 |
-| M1 HTTP layer | **next** |
-| M2 Introspection and cache | not started |
-| M3 search and count | not started |
-| M4 filereport, links, manifests | not started |
+| M1 HTTP layer | done 2026-09-26 |
+| M2 Introspection and cache | done 2026-09-26 |
+| M3 search and count | done 2026-09-26 |
+| M4 filereport, links, manifests | **next** |
 | M5 Resumable bulk retrieval | not started |
 | M6 Browser API | not started |
 | M7 CLI | not started |
@@ -75,6 +75,15 @@ institutions. Accepted tradeoff: no automatic BioContainers image. If a
 container is later needed (a Nextflow pipeline would want one), publish to
 GHCR or add a Bioconda recipe depending on the conda-forge build.
 
+**Retry HTTP 429, and nothing else in the 4xx range.** ENA
+[documents](https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access.html)
+a limit of 50 requests per second and rejects the excess with 429. A 429 is ENA
+throttling, not refusing, so it is the one client error worth retrying. The
+window is measured per second, so backoff has a one second floor; no
+`Retry-After` is documented but one is honoured and capped if it ever appears.
+`ENARateLimitError` is raised once retries are exhausted, so a caller can tell
+throttling apart from a real failure.
+
 **Install order in all docs: `uv`, then conda-forge, then source.**
 
 **Downloading is tiered, not binary.** Decided 2026-09-27 after the user
@@ -97,6 +106,31 @@ documents it; `pysradb` implements tier 3.
 
 ---
 
+## Reference documentation
+
+ENA has no OpenAPI spec, so these pages are the reference. Read them before
+guessing, but trust the table below over them: several statements on these
+pages are already contradicted by the live API, and each contradiction is
+recorded as its own row.
+
+| Page | URL |
+|---|---|
+| Programmatic access, index and rate limits | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access.html> |
+| File reports, the `filereport` endpoint | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/file-reports.html> |
+| Advanced search, the query grammar | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/advanced-search.html> |
+| Browser API | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/browser-api.html> |
+| Cross references | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/cross-reference.html> |
+| Taxon API | <https://ena-docs.readthedocs.io/en/latest/retrieval/programmatic-access/taxon-api.html> |
+| File download, FTP layout and Aspera | <https://ena-docs.readthedocs.io/en/latest/retrieval/file-download.html> |
+| Portal API reference | <https://www.ebi.ac.uk/ena/portal/api/doc>, a 302 to a Google Doc that is not machine readable |
+| Browser API reference | <https://www.ebi.ac.uk/ena/browser/api/doc> |
+
+**Where the docs are wrong.** They say `filereport` accepts only `read_run` and
+`analysis`, and that `limit` defaults to 100,000. Neither holds. Assume any
+unverified claim on these pages may be stale.
+
+---
+
 ## Verified API facts
 
 Probed live 2026-09-26. Recheck before assuming any still hold, but do not
@@ -109,20 +143,41 @@ re-probe as a matter of course.
 | Result types | 15, from `/results` |
 | `read_run` return fields | 195, from `/returnFields?result=read_run` |
 | `read_run` search fields | 160, from `/searchFields?result=read_run` |
-| Field metadata shape | `{columnId, description, type}`, type in `text` \| `number` \| `date` |
+| `/results` shape | `{resultId, description, primaryAccessionType, recordCount, lastUpdated}`, `recordCount` is a string |
+| Field metadata shape | `{columnId, description, type}` |
+| Field `type` values | `text`, `number`, `date`, `boolean`, `latlon`, `list`, `taxonomy`, `controlled value`, `indexed`. Wider than first recorded |
+| Missing field `type` | **`type` is absent on 247 of 2845 fields** (40 of 195 `read_run` return fields). The type word sits in `description` instead, e.g. `{"columnId": "run_date", "description": "date"}`. Every untyped description is one of `text`, `number`, `latlon`, `boolean`, `date` |
+| `/count` body | A one-column TSV with a `count` header, not a bare number |
+| Result ordering | **Not stable.** Two identical `limit=5` queries return different rows |
+| `read_run` date search fields | `first_created`, `first_public`, `last_updated` |
 | `offset` | **Rejected**, GET and POST, body `Unsupported param offset` |
 | `sortFields` | **Rejected**, HTTP 400 |
 | `limit=0` | Returns everything in one response. `tax_tree(4932)` read_run: 276,447 rows, 3.1 MB, 34.6 s |
 | `/count` | Cheap, accepts the full query grammar including date ranges |
 | OpenAPI spec | None. `/v3/api-docs`, `/v2/api-docs`, `/swagger.json` all 404 |
-| Rate-limit headers | None returned |
+| Rate limit | **50 requests per second**, documented, across the discovery and retrieval APIs. Excess is rejected with HTTP 429 |
+| Rate-limit headers | None returned, and no documented `Retry-After` |
 | Retired endpoints | `data/warehouse/search`, `data/view`, `data/warehouse/filereport` all 301 to the browser homepage |
+| Omitting `limit` | Returns **everything**, exactly like `limit=0`. The docs claim a default of 100,000; the live API returned all 276,447 rows, 3.2 MB, in 20 s. There is no safe default, so an unbounded `search()` is a footgun that M5 exists to replace |
+| `filereport` | `filereport?accession=&result=&fields=&format=`. **Not** limited to `read_run` and `analysis` as the docs claim: `result=sample` returns sample metadata |
+| Accession and result mismatch | HTTP 400, plain text, and the body lists the accepted accession regexes for that result, e.g. `sample [ ^(SAME[A]?[0-9]{6,})\|(SAM[ND][0-9]{8})$ ]`. Let ENA report this rather than hardcoding prefix tables |
+| Portal 404 body | JSON, Spring Boot shape `{timestamp, status, error, path}`. Different from the plain-text rejections served with 200 |
+| `/links` on the Portal | **Does not exist.** HTTP 404. Cross references come from the Browser API or the separate xref service, see M4 |
+| Multi-value file fields | `;` separated and positionally parallel across `fastq_ftp`, `fastq_md5` and `fastq_bytes`. A single-file run has no separator, and `submitted_ftp` or `sra_ftp` may be empty |
+| File paths | Carry **no URL scheme**: `ftp.sra.ebi.ac.uk/vol1/fastq/ERR100/090/ERR10003190/ERR10003190_1.fastq.gz`. Prepend `ftp://` or `https://` |
+| FTP directory layout | Inconsistent. Older runs are flat, `ERR164/ERR164407`, newer ones are sharded, `ERR100/090/ERR10003190`. **Never construct a path**, always use the field |
+| Submitted files | Keep the submitter's own filenames under `/vol1/run/`, unrelated to the run accession |
+| FTP roots | Reads and analyses `ftp://ftp.sra.ebi.ac.uk/vol1/`, assembled and annotated sequences `ftp://ftp.ebi.ac.uk/pub/databases/ena/` |
+| xref service | `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/...`, and it **does** support `offset` and `limit`. Pagination exists there but not on the Portal |
 
-**The two facts that shape the architecture:** no `offset` and no `sortFields`
-means there is no cursor, so a large result set cannot be resumed by any
-built-in mechanism. M5 exists to solve that. And ENA returns some errors as
-plain text with **HTTP 200**, so status-code checking alone is insufficient;
-body sniffing belongs in the HTTP layer (M1), not bolted on later.
+**The three facts that shape the architecture:** no `offset` and no
+`sortFields` means there is no cursor, so a large result set cannot be resumed
+by any built-in mechanism. M5 exists to solve that. Unstable ordering closes the
+last workaround: you cannot page, diff or reproducibly sample on top of `limit`
+alone, so M5 must partition by query range and never by row position. And ENA
+returns some errors as plain text with **HTTP 200**, so status-code checking
+alone is insufficient; body sniffing belongs in the HTTP layer (M1), not bolted
+on later.
 
 ---
 
@@ -176,7 +231,14 @@ response formats, `limit`, and field selection.
 
 - `filereport()`: the accession-oriented endpoint most users actually want.
   First-class ergonomics, this is the common path.
-- `links()`: cross-references between studies, samples, runs, analyses.
+- `links()`: **open question, resolve before building.** There is no `links`
+  endpoint on the Portal API, it 404s. Three candidates: the Browser API's
+  `/{format}/links/{study,sample,taxon}`, the separate xref REST service at
+  `https://www.ebi.ac.uk/ena/xref/rest/`, or simply `filereport`, since a study
+  accession already returns its runs with their sample and experiment
+  accessions. The third needs no new endpoint and probably covers the common
+  case; the xref service is about *external* databases, which is a different
+  feature from the one this milestone described. Pick one and record why.
 - **Tier 1 URL resolution:** expose `fastq_ftp`, `fastq_md5`, `fastq_bytes`,
   `submitted_ftp`, `sra_ftp` cleanly, with a helper to choose a source and
   handle runs where generated FASTQs do not exist and only submitted files do.
@@ -197,6 +259,9 @@ For a query whose `/count` exceeds a threshold:
 2. Bisect the range using `/count` until every partition is under the
    threshold. `/count` is cheap so this costs little.
 3. Fetch partitions with bounded concurrency, writing each to a checkpoint.
+   The pool must stay under ENA's 50 requests per second. Bisection makes this
+   easy to breach by accident, because `/count` is fast and the bisect loop is
+   tight, so budget the whole client and not just the fetch stage.
 4. On resume, skip partitions already checkpointed.
 
 Fallback when no usable partition key exists: a single unresumable fetch with a
@@ -210,6 +275,12 @@ refetching completed partitions, proven by a test that does exactly that.
 
 Module `enaportal/browser.py`. Records by accession as XML, EMBL or FASTA.
 Smaller surface than the Portal side, kept separate.
+
+Paths are all `/{format}/...` under `https://www.ebi.ac.uk/ena/browser/api/`:
+`/{format}/{accession}`, `/{format}/textsearch/{query}`,
+`/{format}/search/{query}` and `/{format}/links/{study|sample|taxon}`. XML
+covers study, sample, run, experiment, analysis and taxon; EMBL covers
+sequences, WGS and TSA sets; FASTA covers sequences.
 
 ### M7. CLI
 *Depends on: M3, M4, M6.*
@@ -307,6 +378,47 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-26, M3.** `portal.py` with `PortalClient.search()` returning a
+  Polars DataFrame and `count()`. Result types, return fields and query field
+  names are all validated against M2 before anything is sent, with `difflib`
+  suggestions on a typo. Module-level `search`/`count`/`results` helpers in
+  `_api.py` over one lazily created client.
+  Three things worth knowing. `/count` returns a one-column TSV with a `count`
+  header, not the bare number the name suggests. Search results are **not
+  stably ordered**, which is now a recorded fact and a live test: it rules out
+  comparing rows between two runs and reinforces M5's range partitioning. And
+  every column is returned as a Polars string on purpose, because ENA packs
+  multiple values into one cell with semicolons and inferred dtypes would
+  otherwise change from query to query.
+  Also fixed an M0 hole: `pytest` was not excluding `live` at all. The marker
+  was registered but `addopts` had no `-m 'not live'`, so the constraint was
+  documentation only. `tests/conftest.py` now also refuses sockets in unmarked
+  tests, so the offline guarantee is enforced rather than remembered.
+
+- **2026-09-26, M2.** `schema.py` with `results()`, `return_fields()`,
+  `search_fields()` and typed `Result`/`Field` dataclasses, over a TTL'd JSON
+  cache in the platform cache directory (`_cache.py`, no new dependency).
+  Lookups fall back memory, fresh cache, ENA, stale cache, packaged snapshot,
+  warning on each step past ENA. `scripts/update_snapshot.py` regenerates the
+  404 KB snapshot of all 15 result types and has a `--check` mode for M9.
+  The surprise: ENA **omits** `type` on 247 fields and puts the type word in
+  `description` instead. Taking the recorded shape at face value would have
+  silently dropped a date field, which M5 partitions on, so `Field.from_payload`
+  recovers it. The recorded set of type values was also too narrow.
+
+- **2026-09-26, M1.** `_http.py` over `httpx.Client`: retries with jittered
+  exponential backoff on connection errors and 5xx, never on 4xx, streaming
+  line reads, and body sniffing for ENA's HTTP 200 text rejections. HTTP 400
+  raises `ENAQueryError` rather than `ENAHTTPError`, so callers catch one type
+  for "the query was wrong" however ENA chose to report it. Added
+  `ENAConnectionError` and `ENASchemaError` to the hierarchy in the plan.
+  Read timeouts are deliberately **not** retried: a slow response means ENA is
+  still working, and retrying a 35 second query only adds load.
+  HTTP 429 **is** retried, as the single exception to no-retry-on-4xx, once
+  ENA's documented 50 requests per second limit came to light. The original
+  "no retry on 4xx" line would have made M5's concurrent partition fetch fail
+  hard on a transient throttle.
 
 - **2026-09-26, M0.** Repo, licence, uv project, ruff, `mypy --strict`, pytest
   with the `live` marker, CI across Python 3.10 to 3.13, build check. CI green
