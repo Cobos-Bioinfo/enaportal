@@ -18,7 +18,7 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M1 HTTP layer | done 2026-09-26 |
 | M2 Introspection and cache | done 2026-09-26 |
 | M3 search and count | done 2026-09-26 |
-| M4 filereport, links, manifests | **next** |
+| M4 filereport, related, manifests | **next** |
 | M5 Resumable bulk retrieval | not started |
 | M6 Browser API | not started |
 | M7 CLI | not started |
@@ -85,6 +85,27 @@ window is measured per second, so backoff has a one second floor; no
 throttling apart from a real failure.
 
 **Install order in all docs: `uv`, then conda-forge, then source.**
+
+**`links()` is dropped. Navigation is a query, not an endpoint.** Decided
+2026-09-26 after probing. M4 assumed a Portal `links` endpoint; there is none,
+it 404s. Nothing is lost, because Portal rows are denormalised: every
+`read_run` row already carries `experiment_accession`, `sample_accession`,
+`secondary_sample_accession`, `study_accession`, `secondary_study_accession`,
+`submission_accession` and `tax_id`, so
+`filereport?accession=PRJEB1787&result=read_run` returns a study's runs with
+their experiment and sample in one call. M4 ships a thin `related()` helper
+over that instead. The milestone's own acceptance criterion never mentioned
+links, which suggests it was a nice-to-have rather than a requirement.
+
+Rejected alternatives. The Browser API does have
+`/{format}/links/{study|sample|taxon}?accession=&result=`, but it returned
+882 KB of XML where the Portal returns a few KB of TSV, it gives records rather
+than a table, its parameters are undocumented, and it belongs to M6. The xref
+service is a different feature, links out to external databases, and is
+deferred to v0.2 as `xrefs()`.
+
+The helper is not called `links()` because ENA uses that word for the external
+cross references. Reusing it would send users looking in the wrong place.
 
 **Downloading is tiered, not binary.** Decided 2026-09-27 after the user
 challenged the original blanket exclusion. The original "no downloads" position
@@ -169,6 +190,9 @@ re-probe as a matter of course.
 | Submitted files | Keep the submitter's own filenames under `/vol1/run/`, unrelated to the run accession |
 | FTP roots | Reads and analyses `ftp://ftp.sra.ebi.ac.uk/vol1/`, assembled and annotated sequences `ftp://ftp.ebi.ac.uk/pub/databases/ena/` |
 | xref service | `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/...`, and it **does** support `offset` and `limit`. Pagination exists there but not on the Portal |
+| Browser `links` | `/{format}/links/{study\|sample\|taxon}?accession=&result=`. Both parameters are required and neither is documented; omitting one gives an opaque Spring Boot 400. Returned 882 KB of XML for one study |
+| Primary and secondary accessions | One object has both forms, e.g. study `PRJEB1787` and `ERP001736`. The Portal exposes both as separate columns, so anything taking an accession must accept either |
+| Denormalised rows | A `read_run` row carries `experiment_accession`, `sample_accession`, `secondary_sample_accession`, `study_accession`, `secondary_study_accession`, `submission_accession`, `tax_id`. `analysis` adds `related_analysis_accession`, `sample` adds `related_sample_accession`. Navigation needs no extra endpoint |
 
 **The three facts that shape the architecture:** no `offset` and no
 `sortFields` means there is no cursor, so a large result set cannot be resumed
@@ -226,19 +250,16 @@ response formats, `limit`, and field selection.
 
 *Done when:* the three-line README example runs against the live API.
 
-### M4. filereport, links, and manifests
+### M4. filereport, related, and manifests
 *Depends on: M3.*
 
 - `filereport()`: the accession-oriented endpoint most users actually want.
   First-class ergonomics, this is the common path.
-- `links()`: **open question, resolve before building.** There is no `links`
-  endpoint on the Portal API, it 404s. Three candidates: the Browser API's
-  `/{format}/links/{study,sample,taxon}`, the separate xref REST service at
-  `https://www.ebi.ac.uk/ena/xref/rest/`, or simply `filereport`, since a study
-  accession already returns its runs with their sample and experiment
-  accessions. The third needs no new endpoint and probably covers the common
-  case; the xref service is about *external* databases, which is a different
-  feature from the one this milestone described. Pick one and record why.
+- `related()`: navigation between studies, samples, experiments, runs and
+  analyses. A thin wrapper over a single `filereport` call, not a new endpoint,
+  because the rows are already denormalised. Must accept either accession form,
+  primary or secondary. Deliberately **not** named `links()`. See the decision
+  above; `links()` is dropped and is not to be reintroduced.
 - **Tier 1 URL resolution:** expose `fastq_ftp`, `fastq_md5`, `fastq_bytes`,
   `submitted_ftp`, `sra_ftp` cleanly, with a helper to choose a source and
   handle runs where generated FASTQs do not exist and only submitted files do.
@@ -246,7 +267,8 @@ response formats, `limit`, and field selection.
   file, a curl script, or an nf-core/fetchngs-compatible samplesheet. This is
   the handoff to real downloaders and it is what makes tier 3 optional.
 
-*Done when:* a search result can be turned into a manifest that aria2c accepts
+*Done when:* `related()` turns a study accession into its runs in one call,
+and a search result can be turned into a manifest that aria2c accepts
 and that fetchngs parses, proven by fixture tests on the emitted text.
 
 ### M5. Resumable bulk retrieval
@@ -286,7 +308,7 @@ sequences, WGS and TSA sets; FASTA covers sequences.
 *Depends on: M3, M4, M6.*
 
 Thin `argparse` layer over the public API. Subcommands mirror the library:
-`search`, `count`, `filereport`, `links`, `fields`, `results`. TSV to stdout by
+`search`, `count`, `filereport`, `related`, `fields`, `results`. TSV to stdout by
 default so it pipes. **Re-add the `[project.scripts]` entry point**, which was
 removed in M0 because the module did not exist and a broken console script is
 worse than none.
@@ -326,6 +348,12 @@ recipe through `staged-recipes`. Tag `v0.1.0`.
   per-file MD5 verification against `fastq_md5`, retry with backoff, bounded
   parallelism. Scoped and documented as suitable for tens of files. README
   points at enaBrowserTools and nf-core/fetchngs for serious transfers.
+- **`xrefs()` over the cross reference service.** External database links for
+  an accession, from
+  `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/search?accession=`, returning
+  rows such as EuropePMC and MGnify. Genuinely useful but additive: a third
+  base URL, a third client, and `offset` pagination the Portal does not have.
+  Perhaps half a day, which is not worth spending while M5 is unbuilt.
 - **M12 taxon-driven discovery.** A helper wrapping `tax_tree()` with filters,
   carried over from the archived `enatrieve-tx`. Deferred on user instruction:
   the general client has to be right first.
@@ -358,6 +386,7 @@ Do not add these, and do not suggest them as improvements.
 | Rejected | Why |
 |---|---|
 | Async public API | See decisions |
+| A `links()` endpoint wrapper | No such Portal endpoint, and navigation is already in the denormalised rows. See decisions |
 | pandas | See constraints |
 | Bulk or Aspera transfer | Tier 4, out permanently |
 | Data submission | `ena-upload-cli` owns it |
