@@ -18,6 +18,7 @@ import polars as pl
 
 from enaportal._http import DEFAULT_TIMEOUT, PORTAL_BASE_URL, ENAHTTPClient, Params, ResponseShape
 from enaportal._query import extract_field_names
+from enaportal._tsv import read_ena_tsv
 from enaportal.errors import ENAQueryError
 from enaportal.schema import DEFAULT_TTL_SECONDS, Field, Result, SchemaClient
 
@@ -252,7 +253,7 @@ class PortalClient:
         if not buffer.getbuffer().nbytes:
             return pl.DataFrame()
         buffer.seek(0)
-        return _read_ena_tsv(buffer)
+        return read_ena_tsv(buffer)
 
     def _stream(self, path: str, params: Params) -> Iterator[str]:
         if _needs_post(params):
@@ -292,19 +293,6 @@ def _needs_post(params: Params) -> bool:
     """Whether the encoded parameters are too long to send in a request line."""
     encoded = sum(len(str(key)) + len(str(value)) + 2 for key, value in params.items())
     return encoded > MAX_GET_LENGTH
-
-
-def _read_ena_tsv(source: io.BytesIO) -> pl.DataFrame:
-    # ENA does not quote its TSV, and free-text fields such as study_title
-    # contain bare double quotes, so quote parsing has to be off entirely.
-    return pl.read_csv(
-        source,
-        separator="\t",
-        has_header=True,
-        quote_char=None,
-        infer_schema_length=0,
-        truncate_ragged_lines=True,
-    )
 
 
 def _frame_from_records(records: Any) -> pl.DataFrame:
