@@ -64,6 +64,21 @@ markers = [
     "live: requires network access to www.ebi.ac.uk",
 ]
 
+[tool.coverage.run]
+source = ["enaportal"]
+branch = true
+# Only ever run as a subprocess, which coverage does not follow.
+omit = ["*/enaportal/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = [
+    # The fallback for a source tree that was never installed.
+    "except PackageNotFoundError:",
+]
+
 [tool.mypy]
 python_version = "3.10"
 strict = true

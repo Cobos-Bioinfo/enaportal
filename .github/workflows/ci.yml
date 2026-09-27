@@ -43,8 +43,9 @@ jobs:
           enable-cache: true
       - name: Tests
         # Default run excludes the `live` marker, so CI never depends on ENA
-        # being up. The scheduled drift workflow covers the live path.
-        run: uv run --locked --python ${{ matrix.python }} pytest
+        # being up. The scheduled drift workflow covers the live path. The
+        # coverage floor lives in pyproject.toml, so a local --cov run agrees.
+        run: uv run --locked --python ${{ matrix.python }} pytest --cov
 
   build:
     name: Build distributions
