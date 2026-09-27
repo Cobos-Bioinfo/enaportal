@@ -1,7 +1,8 @@
-"""Module-level helpers over one lazily created PortalClient.
+"""Module-level helpers over one lazily created client for each API.
 
 Convenient for a script or a REPL. Anything doing repeated work should hold its
-own PortalClient so the connection pool and the schema cache are reused.
+own PortalClient or BrowserClient so the connection pool and the schema cache
+are reused.
 """
 
 from __future__ import annotations
@@ -12,12 +13,14 @@ from pathlib import Path
 
 import polars as pl
 
+from enaportal.browser import DEFAULT_TEXTSEARCH_LIMIT, BrowserClient, RecordFormat
 from enaportal.bulk import DEFAULT_CONCURRENCY, DEFAULT_THRESHOLD, BulkPlan, Partition
 from enaportal.portal import Format, PortalClient
 from enaportal.schema import Field, Result
 
 _lock = threading.Lock()
 _client: PortalClient | None = None
+_browser: BrowserClient | None = None
 
 
 def default_client() -> PortalClient:
@@ -27,6 +30,14 @@ def default_client() -> PortalClient:
         if _client is None:
             _client = PortalClient()
         return _client
+
+
+def _default_browser() -> BrowserClient:
+    global _browser
+    with _lock:
+        if _browser is None:
+            _browser = BrowserClient()
+        return _browser
 
 
 def search(
@@ -171,10 +182,40 @@ def refresh_schema(result: str | None = None) -> None:
     default_client().schema.refresh(result)
 
 
+def fetch(
+    accession: str | Sequence[str],
+    *,
+    format: RecordFormat = "xml",
+    annotation_only: bool = False,
+    line_limit: int | None = None,
+) -> str:
+    """Records for one or more accessions, as XML, EMBL or FASTA text."""
+    return _default_browser().fetch(
+        accession, format=format, annotation_only=annotation_only, line_limit=line_limit
+    )
+
+
+def textsearch(
+    query: str,
+    *,
+    result: str,
+    limit: int | None = DEFAULT_TEXTSEARCH_LIMIT,
+    offset: int | None = None,
+) -> pl.DataFrame:
+    """Free-text search, returning matching accessions and their descriptions."""
+    return _default_browser().textsearch(query, result=result, limit=limit, offset=offset)
+
+
+def textsearch_count(query: str, *, result: str) -> int:
+    """How many records a text search matches, without fetching any."""
+    return _default_browser().textsearch_count(query, result=result)
+
+
 __all__ = [
     "bulk_search",
     "count",
     "default_client",
+    "fetch",
     "filereport",
     "plan_partitions",
     "refresh_schema",
@@ -183,4 +224,6 @@ __all__ = [
     "return_fields",
     "search",
     "search_fields",
+    "textsearch",
+    "textsearch_count",
 ]
