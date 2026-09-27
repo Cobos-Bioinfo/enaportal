@@ -15,6 +15,7 @@ from enaportal._http import (
     RATE_LIMIT_MIN_BACKOFF,
     ENAHTTPClient,
     RateLimiter,
+    ResponseShape,
     sniff_text_error,
 )
 from enaportal.errors import (
@@ -432,10 +433,19 @@ def test_sniffer_flags_ena_rejections(body: str) -> None:
         "invalid_reason\tstatus",
         ">ENA|A00145|A00145.1 description",
         "ID   A00145; SV 1; linear; DNA;",
+        "<RUN_SET>",
+        '<?xml version="1.0" encoding="UTF-8"?>',
     ],
 )
 def test_sniffer_passes_real_payloads(body: str) -> None:
     assert sniff_text_error(body, "tsv") is None
+
+
+@pytest.mark.parametrize("shape", ["tsv", "text", "json"])
+def test_sniffer_unwraps_the_text_search_error_element(shape: ResponseShape) -> None:
+    body = "<error>Invalid result type &apos;nonsense&apos;.</error>"
+
+    assert sniff_text_error(body, shape) == "Invalid result type 'nonsense'."
 
 
 def test_the_limiter_does_not_delay_a_lone_request() -> None:

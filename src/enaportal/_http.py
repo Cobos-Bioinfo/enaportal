@@ -76,6 +76,10 @@ _ERROR_OPENINGS = re.compile(
     re.IGNORECASE,
 )
 
+# The Browser API's text search wraps its HTTP 200 rejections in a bare
+# <error> element rather than answering in the format that was asked for.
+_ERROR_ELEMENT = re.compile(r"^<error>(.*)</error>$", re.DOTALL)
+
 # The Browser API's error bodies are Spring Boot ErrorDetails serialised to
 # match the request: XML on /xml, key=value lines on /embl and /fasta, JSON on
 # a batch POST. JSON is parsed; these cover the other two.
@@ -96,6 +100,9 @@ def sniff_text_error(first_line: str, shape: ResponseShape) -> str | None:
     stripped = first_line.strip()
     if not stripped:
         return None
+    element = _ERROR_ELEMENT.match(stripped)
+    if element is not None:
+        return html.unescape(element.group(1).strip()) or stripped
     if shape == "json":
         return None if stripped[0] in "[{" else stripped
     return stripped if _ERROR_OPENINGS.match(stripped) else None
