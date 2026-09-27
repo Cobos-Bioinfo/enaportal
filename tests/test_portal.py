@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gzip
+import io
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -344,3 +346,26 @@ def test_related_honours_explicit_fields(client: PortalClient) -> None:
     client.related("PRJEB1787", fields=["run_accession"])
 
     assert route.calls[0].request.url.params["fields"] == "run_accession"
+
+
+@respx.mock
+def test_search_to_file_writes_a_path(client: PortalClient, tmp_path: Path) -> None:
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, text=TSV))
+    path = tmp_path / "runs.tsv"
+
+    assert client.search_to_file(path, "read_run", limit=2) == 2
+    assert path.read_text() == TSV
+
+
+@respx.mock
+def test_search_to_file_writes_into_an_open_stream_and_leaves_it_open(
+    client: PortalClient,
+) -> None:
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, text=TSV))
+    buffer = io.BytesIO()
+
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as handle:
+        assert client.search_to_file(handle, "read_run", limit=2) == 2
+        assert not handle.closed
+
+    assert gzip.decompress(buffer.getvalue()).decode() == TSV
