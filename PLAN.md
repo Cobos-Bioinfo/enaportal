@@ -23,8 +23,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M6 Browser API | done 2026-09-27 |
 | M7 CLI | done 2026-09-27 |
 | M8 Test suite | done 2026-09-27 |
-| M9 Schema-drift workflow | **next** |
-| M10 Documentation | not started |
+| M9 Schema-drift workflow | done 2026-09-27 |
+| M10 Documentation | **next** |
 | M11 Release | not started |
 
 Append to the status log at the bottom when a milestone closes.
@@ -375,6 +375,9 @@ Weekly scheduled job: fetch the live schema, diff against the committed
 snapshot, open an issue on change. This is the maintenance story made concrete
 and it is what keeps long-term maintenance cost near zero.
 
+Shipped with the live contract tests in the same workflow, and with a diff
+that ignores record counts; see the status log.
+
 ### M10. Documentation
 *Depends on: M1 to M7.*
 
@@ -455,6 +458,42 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-27, M9.** `.github/workflows/schema-drift.yml`, run every Monday
+  and on demand, with two jobs. One compares ENA's live schema with the
+  packaged snapshot through `scripts/update_snapshot.py --check`. The other
+  runs `pytest -m live`, which until now ran only by hand, because a moved
+  schema is only one of the ways ENA can break the library. Each job keeps one
+  open issue, labelled `schema-drift` or `live-tests`, through
+  `scripts/sync_issue.sh`: opened on the first failure, closed by the first
+  clean run, and in between edited with a comment only when the report
+  changes. The body carries a digest of its report for that, since an edit
+  notifies nobody and a weekly comment repeating the same finding trains
+  people to ignore it. Pull requests that touch the machinery run both jobs
+  without the issues, so it is exercised before it merges.
+  The trap: the `--check` written in M2 compared raw payloads, and `/results`
+  carries `recordCount` and `lastUpdated`, which move daily. Run one day after
+  the snapshot was taken, it already reported drift. Weekly, it would have
+  filed an issue every week, and an alarm that always rings is one nobody
+  reads. The check now diffs records by `resultId` or `columnId`, ignoring
+  those two keys and list order, and a Hypothesis test holds it to a set
+  comparison.
+  The report lists first what enaportal reads: a search field gaining or
+  losing the `date` type, which bulk partitions on; a field whose type can be
+  recovered from neither `type` nor its description; a type value never seen
+  before; a result type added or removed; and a changed
+  `primaryAccessionType`, the column the `manifest` subcommand asks for. A type
+  moving from `type` into `description` is listed but not flagged, because
+  `Field` already recovers it and ENA already does it for 247 fields. A payload
+  that no longer parses is reported as drift instead of crashing the job, and
+  the report is cut to fit GitHub's 65,536 character issue body.
+  Exit codes keep an outage apart from drift: 1 with a report is drift, 2 is
+  ENA unreachable, and anything else, a crash included, fails the job without
+  filing an issue. GitHub already notifies on a failed scheduled run, and an
+  outage fixes itself. `scripts` is now type-checked along with `src`.
+  One limit nothing in the repo can fix: GitHub pauses scheduled workflows in a
+  repository with no activity for 60 days and says so only by email. The README
+  says to re-enable it from the Actions tab.
 
 - **2026-09-27, M8.** Most of the suite already existed, built milestone by
   milestone, so M8 added what hand-written tests cannot give.

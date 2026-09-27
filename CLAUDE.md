@@ -82,6 +82,8 @@ uv run mypy              # types
 uv run pytest            # offline tests
 uv run pytest --cov      # offline tests with the coverage floor
 uv run pytest -m live    # live API tests
+uv run python scripts/update_snapshot.py --check  # report schema drift against ENA
+uv run python scripts/update_snapshot.py  # refresh the offline schema snapshot
 uv run python scripts/record_fixtures.py  # re-record the replayed ENA responses
 uv build                 # distributions
 ```

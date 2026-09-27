@@ -325,8 +325,17 @@ uv run pytest                           # unit tests, never touch the network
 uv run pytest --cov                     # the same, held to the coverage floor
 uv run pytest -m live                   # tests that hit the live ENA API
 uv run python scripts/update_snapshot.py  # refresh the offline schema snapshot
+uv run python scripts/update_snapshot.py --check  # report schema drift, write nothing
 uv run python scripts/record_fixtures.py  # re-record the ENA responses tests replay
 ```
+
+Every Monday the schema-drift workflow compares ENA's live schema with the
+snapshot and runs the live tests. Each kind of failure is kept as one open
+issue, labelled `schema-drift` or `live-tests`, which is updated when the
+finding changes and closed by the first clean run. Record counts and update
+times are not drift. To resolve a drift issue, refresh the snapshot, check the
+changes the issue lists first, and open a PR. GitHub pauses scheduled workflows
+in a repository with no activity for 60 days; re-enable it from the Actions tab.
 
 ## Licence
 
