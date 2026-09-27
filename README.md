@@ -185,6 +185,88 @@ enaportal.to_manifest(runs, "curl")  # a resumable sh script
 enaportal.to_manifest(runs, "nf-core")  # sample,fastq_1,fastq_2
 ```
 
+## Records and text search
+
+The Browser API returns records rather than tables: XML for studies, samples,
+experiments, runs, analyses and taxa, and EMBL or FASTA for sequences.
+
+```python
+enaportal.fetch("PRJEB1787")  # one <PROJECT_SET> document
+enaportal.fetch(["ERR164407", "ERR164408"])  # one request, one <RUN_SET>
+enaportal.fetch("A00145", format="fasta")
+```
+
+ENA silently leaves out any accession it cannot find, so `fetch` counts the
+records that come back, warns when some are missing and raises
+`ENANotFoundError` when all are. Whole assemblies come back as FASTA too, so
+stream anything large to disk. `fetch_to_file` only puts the file in place once
+it is complete:
+
+```python
+from enaportal import BrowserClient
+
+with BrowserClient() as browser:
+    browser.fetch_to_file("yeast.fasta", "GCA_000146045.2", format="fasta")
+```
+
+Text search matches free text across every field, which a Portal query cannot:
+
+```python
+enaportal.textsearch("Tara oceans", result="read_study")  # accession, description
+enaportal.textsearch_count("Tara oceans", result="read_study")
+```
+
+It returns the first 100 hits unless told otherwise. Here `limit=0` means none
+rather than all, the opposite of the Portal, so it is refused; pass
+`limit=None` for every hit.
+
+## Command line
+
+The same library as a command. Tables go to stdout as ENA's own TSV, so they
+pipe:
+
+```bash
+enaportal count read_run --query 'tax_tree(4932) AND library_strategy="RNA-Seq"'
+enaportal search read_run --query 'tax_tree(4932)' -f run_accession,read_count --limit 10
+enaportal related PRJEB1787 | cut -f1
+enaportal fetch PRJEB1787 > study.xml
+enaportal textsearch 'Tara oceans' --result read_study
+enaportal fields read_run --search
+```
+
+Commands that take accessions read them from stdin given `-`, including the
+TSV another call printed, header and all. This fetches the XML of all 249 runs
+in a study in one request:
+
+```bash
+enaportal related PRJEB1787 | enaportal fetch - > runs.xml
+```
+
+`manifest` turns accessions into input for a downloader, or builds it straight
+from a table that already carries the file columns, with no further requests:
+
+```bash
+enaportal manifest PRJEB1787 > files.txt  # every file in the study, checksums included
+aria2c -i files.txt
+
+enaportal search read_run --query 'tax_tree(4932)' -f run_accession,fastq_ftp,fastq_md5 \
+  | enaportal manifest --table - --format nf-core > samplesheet.csv
+```
+
+`bulk` is the resumable download. Interrupt it and run the same command again,
+and it carries on from the partitions already on disk:
+
+```bash
+enaportal bulk read_run --query 'tax_tree(4932)' -f run_accession,fastq_ftp > yeast.tsv
+enaportal bulk read_run --query 'tax_tree(4932)' --dry-run  # the plan, nothing fetched
+```
+
+Warnings and progress go to stderr, and `-q` hides them. `enaportal COMMAND
+--help` lists every option, and `python -m enaportal` works where the script is
+not on the path.
+
+## Holding a client
+
 For repeated work, hold a client so the connection pool and schema cache are
 reused:
 
