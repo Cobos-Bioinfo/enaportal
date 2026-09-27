@@ -35,7 +35,7 @@ from enaportal.bulk import (
     outside_query,
     range_query,
 )
-from enaportal.errors import ENACheckpointError
+from enaportal.errors import ENACheckpointError, ENAConnectionError
 from enaportal.portal import PortalClient
 from enaportal.schema import SchemaClient
 
@@ -373,6 +373,30 @@ def test_bulk_search_survives_being_killed_and_resumes(
     refetched = [query for query in ena.fetched if query in _queries_for(directory, finished, plan)]
     assert refetched == [], "the resume refetched partitions that were already on disk"
     assert len(ena.fetched) == len(plan.partitions) - len(finished)
+
+
+def test_a_concurrent_run_that_fails_keeps_what_landed_and_resumes(
+    client: PortalClient, ena: FakeENA, tmp_path: Path
+) -> None:
+    """One worker fails while others are in flight, which is the path that cancels."""
+    directory = tmp_path / "job"
+    plan = client.plan_partitions("read_run", threshold=100)
+    doomed = plan.partitions[0].query
+    ena.fail_on = lambda query: query == doomed
+
+    with pytest.raises(ENAConnectionError):
+        client.bulk_search("read_run", threshold=100, checkpoint_dir=directory, concurrency=3)
+
+    finished = sorted(path.name for path in directory.glob("*.tsv"))
+    assert len(finished) < len(plan.partitions)
+    assert not list(directory.glob("*.tmp")), "the failed partition left a partial file"
+
+    ena.fail_on = lambda query: False
+    ena.fetched.clear()
+    frame = client.bulk_search("read_run", threshold=100, checkpoint_dir=directory, concurrency=3)
+
+    assert sorted(frame["run_accession"].to_list()) == [accession for accession, _ in ena.rows]
+    assert not set(ena.fetched) & _queries_for(directory, finished, plan)
 
 
 def test_a_resume_reuses_the_stored_plan_without_recounting(
