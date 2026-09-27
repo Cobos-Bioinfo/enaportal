@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator
 
@@ -368,6 +369,20 @@ def test_post_sends_a_form_body(client: ENAHTTPClient) -> None:
     client.post_text("search", data={"result": "read_run", "limit": 0}, shape="tsv")
 
     assert route.calls[0].request.content == b"result=read_run&limit=0"
+
+
+@respx.mock
+def test_stream_lines_can_post_a_json_body(client: ENAHTTPClient) -> None:
+    route = respx.post(SEARCH_URL).mock(return_value=httpx.Response(200, text="<RUN_SET>\n"))
+
+    with client.stream_lines(
+        "search", method="POST", json_body={"accessions": ["ERR1"]}, shape="text"
+    ) as lines:
+        list(lines)
+
+    request = route.calls[0].request
+    assert request.headers["content-type"] == "application/json"
+    assert json.loads(request.content) == {"accessions": ["ERR1"]}
 
 
 class _CutShort(httpx.SyncByteStream):

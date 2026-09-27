@@ -233,6 +233,7 @@ class ENAHTTPClient:
         method: str = "GET",
         params: Params | None = None,
         data: Params | None = None,
+        json_body: Any = None,
         shape: ResponseShape = "tsv",
     ) -> Iterator[Iterator[str]]:
         """Stream a response line by line without holding it all in memory.
@@ -240,7 +241,7 @@ class ENAHTTPClient:
         The first line is read eagerly so that an HTTP 200 rejection raises here
         rather than reaching a TSV parser as a bogus header.
         """
-        request = self._build_request(method, path, params=params, data=data)
+        request = self._build_request(method, path, params=params, data=data, json_body=json_body)
         response = self._send(request, stream=True)
         try:
             lines = _guarded(response.iter_lines(), request)
@@ -262,12 +263,14 @@ class ENAHTTPClient:
         *,
         params: Params | None = None,
         data: Params | None = None,
+        json_body: Any = None,
     ) -> httpx.Request:
         return self._client.build_request(
             method,
             path,
             params=_clean(params),
             data=_clean(data),
+            json=json_body,
         )
 
     def _read(self, request: httpx.Request, *, shape: ResponseShape) -> str:
