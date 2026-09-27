@@ -21,8 +21,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M4 filereport, related, manifests | done 2026-09-26 |
 | M5 Resumable bulk retrieval | done 2026-09-26 |
 | M6 Browser API | done 2026-09-27 |
-| M7 CLI | **next** |
-| M8 Test suite | not started |
+| M7 CLI | done 2026-09-27 |
+| M8 Test suite | **next** |
 | M9 Schema-drift workflow | not started |
 | M10 Documentation | not started |
 | M11 Release | not started |
@@ -351,6 +351,9 @@ default so it pipes. **Re-add the `[project.scripts]` entry point**, which was
 removed in M0 because the module did not exist and a broken console script is
 worse than none.
 
+Shipped with two subcommands beyond this list, `bulk` and `manifest`; see the
+status log.
+
 ### M8. Test suite
 *Depends on: M1 to M7.*
 
@@ -445,6 +448,38 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-27, M7.** `cli.py`, an `argparse` layer with ten subcommands, the
+  `enaportal` console script restored, and `python -m enaportal`. Tables go to
+  stdout as ENA's own unquoted TSV; warnings, progress and errors go to stderr,
+  prefixed `enaportal:`.
+  Two subcommands beyond the plan's list, both decided under the user's
+  standing instruction that technical calls are the agent's to make. `bulk`,
+  because M5 is where the library's value sits and a killable, resumable
+  download is what a terminal user most wants. Killed with SIGINT and rerun
+  against the live API, it fetched only the 4 of 16 partitions that had not
+  landed and returned all 45,329 rows. And `manifest`, because the tier 2
+  handoff to aria2c and fetchngs is a shell workflow first. It asks filereport
+  for exactly the accession and file columns it needs, since a default column
+  set without checksums would silently cost aria2c its verification, and
+  `--table` builds one from a TSV already on hand with no further requests.
+  Output streams where the library allows it: `search` and `fetch` write
+  straight to stdout, which needed `search_to_file` and `fetch_to_file` to
+  accept an open binary file as well as a path. Library users get gzip output
+  from the same change. Tables built from frames are written unquoted, because
+  ENA's free text carries bare double quotes and quoting them would hand back
+  something ENA did not send.
+  Accessions read from stdin with `-` take the first column of each line and
+  skip a header, recognised by being all lower case, which no ENA accession
+  is. That is what lets one call feed the next: `enaportal related PRJEB1787 |
+  enaportal fetch -` fetches a study's 249 runs in one request. Piping
+  accessions into `manifest -` works but costs one filereport per accession;
+  the README points at `manifest STUDY` and `--table` instead.
+  JSON output was left out. ENA's TSV is what pipes, and the library already
+  offers JSON to anyone who wants it. Exit statuses follow the shell: 1 for an
+  ENA error, 2 for a usage error including values the library refuses, 130 on
+  interrupt and 141 when the reader closes the pipe, as `| head` does, so a
+  script can tell them apart. An interrupted `bulk` says how to resume.
 
 - **2026-09-27, M6.** `browser.py` with `BrowserClient.fetch()`,
   `fetch_to_file()`, `textsearch()` and `textsearch_count()`, and the first,

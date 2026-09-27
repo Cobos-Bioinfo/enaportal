@@ -22,6 +22,7 @@ import polars as pl
 
 from enaportal._checkpoint import _reserve
 from enaportal._http import BROWSER_BASE_URL, DEFAULT_TIMEOUT, ENAHTTPClient
+from enaportal._output import BinaryWriter, Destination
 from enaportal._tsv import read_ena_tsv
 from enaportal.errors import ENANotFoundError, ENAQueryError
 
@@ -114,7 +115,7 @@ class BrowserClient:
 
     def fetch_to_file(
         self,
-        path: Path | str,
+        path: Destination,
         accession: str | Sequence[str],
         *,
         format: RecordFormat = "xml",
@@ -126,22 +127,27 @@ class BrowserClient:
         Memory stays flat whatever the size, and the file only appears once it
         is complete, so a failure part way never leaves a truncated record that
         looks whole. Otherwise behaves exactly like fetch.
+
+        path may also be a binary file already open, such as sys.stdout.buffer,
+        which is written to as records arrive and left open. Nothing can be
+        withheld from a stream, so the all-or-nothing guarantee is the path's.
         """
         accessions = _distinct(accession)
         options = _options(format, annotation_only=annotation_only, line_limit=line_limit)
         counter = _RecordCounter(format)
-        target = Path(path)
-        temporary = _reserve(target.parent, target.name)
-        try:
-            with temporary.open("wb") as handle:
-                for line in self._lines(accessions, format, options) if accessions else ():
-                    counter.feed(line)
-                    handle.write(line.encode("utf-8"))
-                    handle.write(b"\n")
-            os.replace(temporary, target)
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
+        lines = self._lines(accessions, format, options) if accessions else iter(())
+        if isinstance(path, (str, os.PathLike)):
+            target = Path(path)
+            temporary = _reserve(target.parent, target.name)
+            try:
+                with temporary.open("wb") as handle:
+                    _write(handle, lines, counter)
+                os.replace(temporary, target)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+        else:
+            _write(path, lines, counter)
         _warn_if_short(len(accessions), counter)
         return counter.records
 
@@ -313,6 +319,13 @@ def _xml_prologue(lines: Iterator[str]) -> list[str] | None:
     if prologue:
         raise ENAQueryError(_UNMERGEABLE)
     return None
+
+
+def _write(handle: BinaryWriter, lines: Iterable[str], counter: _RecordCounter) -> None:
+    for line in lines:
+        counter.feed(line)
+        handle.write(line.encode("utf-8"))
+        handle.write(b"\n")
 
 
 def _warn_if_short(requested: int, counter: _RecordCounter) -> None:

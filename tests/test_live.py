@@ -6,6 +6,8 @@ still hold, not that any particular record exists.
 
 from __future__ import annotations
 
+import io
+import sys
 import warnings
 from collections.abc import Iterator
 from datetime import date
@@ -17,6 +19,7 @@ import httpx
 import polars as pl
 import pytest
 
+from enaportal import cli
 from enaportal.browser import BrowserClient
 from enaportal.bulk import Partition, outside_query, range_query
 from enaportal.errors import ENANotFoundError, ENAQueryError
@@ -384,3 +387,38 @@ def test_textsearch_count_agrees_with_the_hits(browser: BrowserClient) -> None:
 def test_textsearch_rejects_an_unknown_result_type(browser: BrowserClient) -> None:
     with pytest.raises(ENAQueryError, match="Invalid result type"):
         browser.textsearch("Tara oceans", result="nonsense")
+
+
+@pytest.fixture
+def cached_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the command line's schema cache out of the user's own."""
+    monkeypatch.setenv("ENAPORTAL_CACHE_DIR", str(tmp_path))
+    return tmp_path
+
+
+@pytest.mark.usefixtures("cached_in")
+def test_the_command_line_counts(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["count", "read_run", "--query", "tax_tree(4932)"]) == 0
+    assert int(capsys.readouterr().out) > 200_000
+
+
+@pytest.mark.usefixtures("cached_in")
+def test_a_search_pipes_into_filereport(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    query = "study_accession=PRJEB1787"
+    cli.main(["search", "read_run", "--query", query, "-f", "run_accession", "--limit", "2"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO(capsys.readouterr().out))
+
+    assert cli.main(["filereport", "-", "-f", "run_accession,fastq_md5"]) == 0
+    rows = capsys.readouterr().out.splitlines()
+    assert rows[0] == "run_accession\tfastq_md5"
+    assert len(rows) == 3
+
+
+@pytest.mark.usefixtures("cached_in")
+def test_manifest_resolves_a_run_to_checksummed_urls(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["manifest", "ERR164407"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR164/ERR164407/")
+    assert "  checksum=md5=" in out

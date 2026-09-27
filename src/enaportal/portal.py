@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -17,6 +18,7 @@ from typing import Any, Literal
 import polars as pl
 
 from enaportal._http import DEFAULT_TIMEOUT, PORTAL_BASE_URL, ENAHTTPClient, Params, ResponseShape
+from enaportal._output import BinaryWriter, Destination
 from enaportal._query import extract_field_names
 from enaportal._tsv import read_ena_tsv
 from enaportal.bulk import DEFAULT_CONCURRENCY, DEFAULT_THRESHOLD, BulkPlan, Partition
@@ -157,7 +159,7 @@ class PortalClient:
 
     def search_to_file(
         self,
-        path: Path | str,
+        path: Destination,
         result: str,
         *,
         query: str | None = None,
@@ -172,6 +174,9 @@ class PortalClient:
         Memory stays flat however large the result set is, which is what makes
         it the right shape for a bulk checkpoint. TSV only: it is the format
         ENA streams, and the one that can be concatenated afterwards.
+
+        path may also be a binary file already open, such as sys.stdout.buffer
+        or a gzip.open handle, which is written to and left open.
         """
         params = self._params(
             result,
@@ -188,13 +193,10 @@ class PortalClient:
             params["limit"] = limit
         params["format"] = "tsv"
 
-        written = 0
-        with Path(path).open("wb") as handle:
-            for line in self._stream("search", params):
-                handle.write(line.encode("utf-8"))
-                handle.write(b"\n")
-                written += 1
-        return max(written - 1, 0)
+        if isinstance(path, (str, os.PathLike)):
+            with Path(path).open("wb") as handle:
+                return self._write_lines(handle, "search", params)
+        return self._write_lines(path, "search", params)
 
     def bulk_search(
         self,
@@ -343,6 +345,14 @@ class PortalClient:
         if include_metagenomes is not None:
             params["includeMetagenomes"] = "true" if include_metagenomes else "false"
         return params
+
+    def _write_lines(self, handle: BinaryWriter, path: str, params: Params) -> int:
+        written = 0
+        for line in self._stream(path, params):
+            handle.write(line.encode("utf-8"))
+            handle.write(b"\n")
+            written += 1
+        return max(written - 1, 0)
 
     def _read_tsv(self, path: str, params: Params) -> pl.DataFrame:
         buffer = io.BytesIO()

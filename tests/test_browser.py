@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import warnings
 from collections.abc import Callable, Iterator
@@ -371,6 +372,20 @@ def test_fetch_to_file_leaves_nothing_behind_when_cut_short(
 
     assert path.read_text() == "earlier contents\n"
     assert list(tmp_path.iterdir()) == [path]
+
+
+@respx.mock
+def test_fetch_to_file_writes_into_an_open_stream(
+    browser: BrowserClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.post(FASTA_URL).mock(side_effect=answering(fasta))
+    monkeypatch.chdir(tmp_path)
+    stream = io.BytesIO()
+
+    assert browser.fetch_to_file(stream, ["A1", "A2"], format="fasta") == 2
+    assert stream.getvalue().decode() == fasta("A1", "A2")
+    assert not stream.closed
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_fetch_to_file_of_no_accessions_writes_an_empty_file(
