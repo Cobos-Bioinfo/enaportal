@@ -21,6 +21,9 @@ dependencies = [
     "polars>=1.0",
 ]
 
+[project.scripts]
+enaportal = "enaportal.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/Cobos-Bioinfo/enaportal"
 Repository = "https://github.com/Cobos-Bioinfo/enaportal"
