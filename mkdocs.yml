@@ -1,0 +1,99 @@
+site_name: enaportal
+site_description: A typed Python client for the ENA Portal and Browser APIs.
+site_url: https://cobos-bioinfo.github.io/enaportal/
+repo_url: https://github.com/Cobos-Bioinfo/enaportal
+repo_name: Cobos-Bioinfo/enaportal
+edit_uri: edit/main/docs/
+copyright: MIT licence. Not affiliated with or endorsed by EMBL-EBI.
+
+strict: true
+
+nav:
+  - Home: index.md
+  - Getting started: quickstart.md
+  - Guide:
+      - Searching the Portal: guide/searching.md
+      - Bulk retrieval: guide/bulk.md
+      - Files and manifests: guide/files.md
+      - Records and text search: guide/browser.md
+      - Command line: guide/cli.md
+      - Errors, retries and limits: guide/errors.md
+  - Choosing a tool: comparison.md
+  - Reference:
+      - Portal: reference/portal.md
+      - Schema: reference/schema.md
+      - Browser: reference/browser.md
+      - Files: reference/files.md
+      - Errors: reference/errors.md
+      - Commands: reference/cli.md
+  - Development: development.md
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+hooks:
+  - scripts/docs_hooks.py
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          inventories:
+            - https://docs.python.org/3/objects.inv
+          options:
+            docstring_style: google
+            filters: ["!^_"]
+            heading_level: 2
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            show_source: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
