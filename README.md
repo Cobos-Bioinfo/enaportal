@@ -322,8 +322,10 @@ uv sync
 uv sync                                 # create the environment
 uv run ruff check . && uv run mypy      # lint and types
 uv run pytest                           # unit tests, never touch the network
+uv run pytest --cov                     # the same, held to the coverage floor
 uv run pytest -m live                   # tests that hit the live ENA API
 uv run python scripts/update_snapshot.py  # refresh the offline schema snapshot
+uv run python scripts/record_fixtures.py  # re-record the ENA responses tests replay
 ```
 
 ## Licence
