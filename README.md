@@ -6,6 +6,8 @@ Portal and Browser APIs.
 > **Status: early development.** Nothing is published yet. The first release is
 > tracked in [PLAN.md](PLAN.md).
 
+**Documentation: <https://cobos-bioinfo.github.io/enaportal/>**
+
 ## Why this exists
 
 The European Nucleotide Archive exposes a capable public API: 15 result types
@@ -143,6 +145,8 @@ For a single query too large to hold in memory, `search_to_file` streams
 straight to disk:
 
 ```python
+from enaportal import PortalClient
+
 with PortalClient() as ena:
     rows = ena.search_to_file("runs.tsv", "read_run", query="tax_tree(4932)")
 ```
@@ -327,6 +331,7 @@ uv run pytest -m live                   # tests that hit the live ENA API
 uv run python scripts/update_snapshot.py  # refresh the offline schema snapshot
 uv run python scripts/update_snapshot.py --check  # report schema drift, write nothing
 uv run python scripts/record_fixtures.py  # re-record the ENA responses tests replay
+uv run --group docs mkdocs serve        # preview the documentation site
 ```
 
 Every Monday the schema-drift workflow compares ENA's live schema with the
