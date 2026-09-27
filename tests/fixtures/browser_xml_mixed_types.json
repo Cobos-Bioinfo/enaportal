@@ -1,0 +1,24 @@
+{
+ "api": "browser",
+ "method": "POST",
+ "path": "xml",
+ "params": {},
+ "json": {
+  "accessions": [
+   "PRJEB1787",
+   "ERR164407"
+  ]
+ },
+ "status": 400,
+ "content_type": "application/json",
+ "body": [
+  "{",
+  "  \"timestamp\" : 1790514798807,",
+  "  \"status\" : 400,",
+  "  \"error\" : \"Bad Request\",",
+  "  \"message\" : \"All accessions must be of the same data type as the first accession, which was PROJECT.\",",
+  "  \"path\" : \"/ena/browser/api/xml\"",
+  "}",
+  ""
+ ]
+}

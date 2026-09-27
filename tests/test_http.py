@@ -117,6 +117,21 @@ def test_does_not_retry_4xx(client: ENAHTTPClient) -> None:
 
 
 @respx.mock
+def test_a_500_for_an_unknown_search_field_is_a_query_error_and_not_retried(
+    client: ENAHTTPClient, slept: list[float]
+) -> None:
+    route = respx.get(COUNT_URL).mock(
+        return_value=httpx.Response(500, text="Unknown search field:not_a_field")
+    )
+
+    with pytest.raises(ENAQueryError, match="Unknown search field:not_a_field"):
+        client.get_text("count")
+
+    assert route.call_count == 1
+    assert slept == []
+
+
+@respx.mock
 def test_retries_429_then_succeeds(client: ENAHTTPClient, slept: list[float]) -> None:
     route = respx.get(COUNT_URL).mock(
         side_effect=[

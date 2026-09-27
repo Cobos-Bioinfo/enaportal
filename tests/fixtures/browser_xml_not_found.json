@@ -1,0 +1,23 @@
+{
+ "api": "browser",
+ "method": "POST",
+ "path": "xml",
+ "params": {},
+ "json": {
+  "accessions": [
+   "ERR99999999"
+  ]
+ },
+ "status": 404,
+ "content_type": "application/json",
+ "body": [
+  "{",
+  "  \"timestamp\" : 1790514799073,",
+  "  \"status\" : 404,",
+  "  \"error\" : \"Not Found\",",
+  "  \"message\" : \"Failed to get response from SRA API. Response code 404\",",
+  "  \"path\" : \"/ena/browser/api/xml\"",
+  "}",
+  ""
+ ]
+}

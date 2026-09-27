@@ -56,6 +56,12 @@ for field in fields:
   from the default run.
 - Test the query-building and partitioning logic hardest. That is where the
   bugs will be.
+- Real ENA responses live in `tests/fixtures`, recorded by
+  `scripts/record_fixtures.py` and replayed through `tests/recorded.py`.
+  Re-record them; never edit one by hand.
+- Invariants over generated inputs use Hypothesis, checked against an oracle
+  rather than a restatement of the code.
+- CI enforces a 90% line and branch coverage floor, set in `pyproject.toml`.
 
 ## Commits and branches
 
@@ -74,7 +80,9 @@ uv run ruff check .      # lint
 uv run ruff format .     # format
 uv run mypy              # types
 uv run pytest            # offline tests
+uv run pytest --cov      # offline tests with the coverage floor
 uv run pytest -m live    # live API tests
+uv run python scripts/record_fixtures.py  # re-record the replayed ENA responses
 uv build                 # distributions
 ```
 

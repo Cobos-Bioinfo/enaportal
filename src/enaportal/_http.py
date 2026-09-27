@@ -76,6 +76,10 @@ _ERROR_OPENINGS = re.compile(
     re.IGNORECASE,
 )
 
+# ENA answers an unknown search field on /count with HTTP 500. The query is what
+# is wrong, so retrying cannot help and the message is the useful part.
+_QUERY_ERROR_AS_500 = re.compile(r"^unknown search field\b", re.IGNORECASE)
+
 # The Browser API's text search wraps its HTTP 200 rejections in a bare
 # <error> element rather than answering in the format that was asked for.
 _ERROR_ELEMENT = re.compile(r"^<error>(.*)</error>$", re.DOTALL)
@@ -318,6 +322,8 @@ class ENAHTTPClient:
                 delay = max(self._backoff(attempt), _retry_after(response.headers))
                 continue
             if response.status_code >= 500:
+                if _QUERY_ERROR_AS_500.match(body.strip()):
+                    raise ENAQueryError(body.strip(), url=str(request.url), body=body)
                 last_error = ENAHTTPError(
                     f"ENA returned HTTP {response.status_code} for {request.url}",
                     status_code=response.status_code,

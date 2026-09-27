@@ -1,0 +1,16 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "search",
+ "params": {
+  "result": "read_run",
+  "offset": "10",
+  "format": "tsv"
+ },
+ "json": null,
+ "status": 400,
+ "content_type": "text/plain",
+ "body": [
+  "Unsupported param offset"
+ ]
+}

@@ -1,0 +1,37 @@
+{
+ "api": "browser",
+ "method": "GET",
+ "path": "tsv/textsearch",
+ "params": {
+  "query": "Candidatus Phytoplasma",
+  "result": "read_study",
+  "limit": "20"
+ },
+ "json": null,
+ "status": 200,
+ "content_type": "text/plain;charset=UTF-8",
+ "body": [
+  "accession\tdescription",
+  "\"SRP561282\"\t\"Candidatus Phytoplasma asteris strain:SPGN Genome sequencing\"",
+  "\"SRP265601\"\t\"Draft genome sequence of \"\"Candidatus Phytoplasma pruni\"\"\"",
+  "\"SRP434614\"\t\"Candidatus Phytoplasma pruni isolate:2A1 Genome sequencing\"",
+  "\"SRP583288\"\t\"Candidatus Phytoplasma sp. TWB_XP isolate:TWB_XP Genome sequencing\"",
+  "\"SRP411287\"\t\"Candidatus Phytoplasma rubi strain:RS Genome sequencing and assembly\"",
+  "\"SRP505317\"\t\"The Complete Genome of Candidatus Phytoplasma solani strain GOE\"",
+  "\"SRP212961\"\t\"Candidatus Phytoplasma pini strain:MDPP Genome sequencing and assembly\"",
+  "\"SRP442580\"\t\"Candidatus Phytoplasma asteris strain M8: Genome sequencing and assembly\"",
+  "\"SRP442581\"\t\"Candidatus Phytoplasma asteris strain M33: Genome sequencing and assembly\"",
+  "\"SRP575908\"\t\"Candidatus Phytoplasma pyri strain:UCh_1 Genome sequencing\"",
+  "\"SRP513422\"\t\"Metagenomic analysis of 'Candidatus Phytoplasma pruni' strains in the U.S.\"",
+  "\"ERP105981\"\t\"Candidatus Phytoplasma solani mleP1 gene encodes a 2-Hydroxycarboxylate transporter\"",
+  "\"SRP321208\"\t\"Candidatus Phytoplasma meliae isolate:ChTYXIII-Mo Genome sequencing and assembly\"",
+  "\"ERP116223\"\t\"Candidatus phytoplasma mali\"",
+  "\"ERP144516\"\t\"Candidatus Phytoplasma rubi\"",
+  "\"SRP417130\"\t\"Candidatus Phytoplasma oryzae strain:HN2022 Genome sequencing and assembly\"",
+  "\"SRP376572\"\t\"Candidatus Phytoplasma vitis strain:strain CH | isolate:strain CH Genome sequencing\"",
+  "\"SRP069757\"\t\"Genome sequencing of Candidatus Phytoplasma oryzae, the causative agent of Napier Grass Stunt disease\"",
+  "\"SRP576602\"\t\"Candidatus Phytoplasma asteris infecting okra\"",
+  "\"SRP517916\"\t\"Columbia Basin potato purple top (CBPPT) phytoplasma is a 'Candidatus Phytoplasma trifolii'-related strainThe CBPPT phytoplasma was identified from diseased brinjal plants growing in a production field located in Gorakhpur, UP, India Metagenomic asse\"",
+  ""
+ ]
+}

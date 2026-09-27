@@ -14,11 +14,18 @@ from xml.etree import ElementTree
 import httpx
 import pytest
 import respx
+from hypothesis import given
+from hypothesis import strategies as st
 
 import enaportal
 from enaportal import _api
 from enaportal._http import BROWSER_BASE_URL, ENAHTTPClient
-from enaportal.browser import DEFAULT_TEXTSEARCH_LIMIT, BrowserClient
+from enaportal.browser import (
+    DEFAULT_TEXTSEARCH_LIMIT,
+    BrowserClient,
+    _merge_xml,
+    _RecordCounter,
+)
 from enaportal.errors import ENAConnectionError, ENANotFoundError, ENAQueryError
 
 XML_URL = f"{BROWSER_BASE_URL}xml"
@@ -498,3 +505,72 @@ def test_module_level_fetch_uses_a_shared_browser_client(
     respx.post(XML_URL).mock(side_effect=answering(run_set))
 
     assert enaportal.fetch("ERR1") == run_set("ERR1")
+
+
+_nested_tags = st.sampled_from(["TITLE", "RUN", "taxon", "RUN_SET", "SAMPLE_ATTRIBUTES"])
+
+
+@st.composite
+def _element(draw: st.DrawFn, depth: int) -> list[str]:
+    """An element's lines, indented anywhere from none to six spaces.
+
+    Nested tags may reuse the record's own name, as a taxon's lineage does, and
+    may sit at column 0, as sample XML's do.
+    """
+    tag = draw(_nested_tags)
+    indent = " " * draw(st.integers(0, 6))
+    children = draw(st.integers(0, 3)) if depth < 3 else 0
+    if not children:
+        return [f"{indent}<{tag}/>" if draw(st.booleans()) else f"{indent}<{tag}>x</{tag}>"]
+    lines = [f"{indent}<{tag}>"]
+    for _ in range(children):
+        lines += draw(_element(depth + 1))
+    return [*lines, f"{indent}</{tag}>"]
+
+
+@st.composite
+def _document(draw: st.DrawFn, accessions: list[str]) -> list[str]:
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>'] if draw(st.booleans()) else []
+    lines.append("<RUN_SET>")
+    for accession in accessions:
+        lines.append(f'<RUN accession="{accession}">')
+        for _ in range(draw(st.integers(0, 3))):
+            lines += draw(_element(1))
+        lines.append("</RUN>")
+    return [*lines, "</RUN_SET>"]
+
+
+@given(st.data(), st.integers(0, 8))
+def test_the_xml_counter_counts_records_however_they_are_laid_out(
+    data: st.DataObject, records: int
+) -> None:
+    counter = _RecordCounter("xml")
+
+    for line in data.draw(_document([f"A{index}" for index in range(records)])):
+        counter.feed(line)
+
+    assert counter.countable
+    assert counter.records == records
+
+
+@given(st.data(), st.lists(st.integers(0, 4), min_size=1, max_size=5))
+def test_merged_batches_are_one_document_with_every_record_in_order(
+    data: st.DataObject, sizes: list[int]
+) -> None:
+    accessions = [f"A{index}" for index in range(sum(sizes))]
+    batches: list[list[str]] = []
+    start = 0
+    for size in sizes:
+        empty_body = size == 0 and data.draw(st.booleans())
+        batch = accessions[start : start + size]
+        batches.append([] if empty_body else data.draw(_document(batch)))
+        start += size
+
+    merged = list(_merge_xml(iter(batch) for batch in batches))
+
+    if all(not batch for batch in batches):
+        assert merged == []
+        return
+    root = ElementTree.fromstring("\n".join(merged).encode())
+    assert root.tag == "RUN_SET"
+    assert [run.get("accession") for run in root] == accessions

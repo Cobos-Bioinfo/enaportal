@@ -1,0 +1,17 @@
+{
+ "api": "browser",
+ "method": "GET",
+ "path": "tsv/textsearch/count",
+ "params": {
+  "query": "Tara oceans",
+  "result": "read_study"
+ },
+ "json": null,
+ "status": 200,
+ "content_type": "application/json;charset=UTF-8",
+ "body": [
+  "{",
+  "  \"count\" : \"48\"",
+  "}"
+ ]
+}
