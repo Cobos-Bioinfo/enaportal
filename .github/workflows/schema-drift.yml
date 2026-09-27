@@ -1,0 +1,110 @@
+name: Schema drift
+
+# ENA changes its schema and its API without notice. This compares the live
+# schema with the packaged snapshot and runs the live contract tests every week,
+# and keeps one issue open for each while it fails. Pull requests that touch
+# the machinery run it too, without the issues, so it is tried before it merges.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/schema-drift.yml
+      - scripts/update_snapshot.py
+      - scripts/sync_issue.sh
+      - tests/test_live.py
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: schema-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Snapshot against the live schema
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Compare
+        id: compare
+        # Exit 1 with a report is drift. Anything else nonzero, including a
+        # crash, which also exits 1 but prints nothing, fails the job instead
+        # of filing an issue.
+        run: |
+          status=0
+          uv run python scripts/update_snapshot.py --check > "$RUNNER_TEMP/drift.md" || status=$?
+          cat "$RUNNER_TEMP/drift.md" >> "$GITHUB_STEP_SUMMARY"
+          if [[ $status -eq 0 ]]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+          elif [[ $status -eq 1 && -s $RUNNER_TEMP/drift.md ]]; then
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+      - name: Report the drift
+        if: steps.compare.outputs.drift == 'true' && github.event_name != 'pull_request'
+        run: bash scripts/sync_issue.sh open schema-drift "ENA schema drift" "$RUNNER_TEMP/drift.md"
+      - name: Close a resolved report
+        if: steps.compare.outputs.drift == 'false' && github.event_name != 'pull_request'
+        run: bash scripts/sync_issue.sh close schema-drift "The snapshot matches the live schema again."
+
+  live:
+    name: Live contract tests
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Run
+        id: run
+        # pytest exits 1 when tests fail, which is the finding. Other codes
+        # mean the run itself broke, and fail the job.
+        run: |
+          status=0
+          uv run pytest -m live -rfE --color=no > "$RUNNER_TEMP/live.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/live.txt"
+          if [[ $status -eq 0 ]]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          elif [[ $status -eq 1 ]]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            exit "$status"
+          fi
+      - name: Write the report
+        if: steps.run.outputs.failed == 'true'
+        run: |
+          {
+            echo "# Live contract tests failing"
+            echo
+            echo "These check the assumptions enaportal makes about ENA's API, so either"
+            echo "ENA changed or it was unavailable when they ran. The run log has the"
+            echo "tracebacks."
+            echo
+            echo '```text'
+            grep -E '^(FAILED|ERROR) ' "$RUNNER_TEMP/live.txt" || echo "No summary lines; see the run log."
+            echo '```'
+          } > "$RUNNER_TEMP/live.md"
+          cat "$RUNNER_TEMP/live.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Report the failures
+        if: steps.run.outputs.failed == 'true' && github.event_name != 'pull_request'
+        run: bash scripts/sync_issue.sh open live-tests "Live contract tests failing" "$RUNNER_TEMP/live.md"
+      - name: Close a resolved report
+        if: steps.run.outputs.failed == 'false' && github.event_name != 'pull_request'
+        run: bash scripts/sync_issue.sh close live-tests "The live contract tests pass again."
+      - name: Fail the pull request
+        if: steps.run.outputs.failed == 'true' && github.event_name == 'pull_request'
+        run: exit 1
