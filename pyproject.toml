@@ -26,6 +26,7 @@ enaportal = "enaportal.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Cobos-Bioinfo/enaportal"
+Documentation = "https://cobos-bioinfo.github.io/enaportal/"
 Repository = "https://github.com/Cobos-Bioinfo/enaportal"
 Issues = "https://github.com/Cobos-Bioinfo/enaportal/issues"
 
