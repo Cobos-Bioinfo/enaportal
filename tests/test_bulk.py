@@ -7,7 +7,10 @@ partitioning depends on: a date range written `f>=A AND f<=B` selects
 
 from __future__ import annotations
 
+import json
 import re
+import tempfile
+import warnings
 from collections.abc import Callable, Iterator
 from datetime import date, timedelta
 from itertools import pairwise
@@ -17,6 +20,8 @@ import httpx
 import polars as pl
 import pytest
 import respx
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from enaportal._checkpoint import MANIFEST_NAME, Checkpoint
 from enaportal._http import PORTAL_BASE_URL, ENAHTTPClient
@@ -494,3 +499,102 @@ def _queries_for(directory: Path, names: list[str], plan: BulkPlan) -> set[str]:
     return {
         part.query or "" for part in plan.partitions if checkpoint.path_for(part.stem).name in names
     }
+
+
+# Offsets in days. The fixed days alongside the whole span make heavy single-day
+# clusters, which are the one case bisection has to hand back oversized.
+SPAN_DAYS = 3000
+ORIGIN = date(2010, 1, 1)
+_offsets = st.one_of(st.integers(0, SPAN_DAYS - 1), st.sampled_from([0, 1, 700, SPAN_DAYS - 1]))
+
+
+@given(offsets=st.lists(_offsets, max_size=400), threshold=st.integers(1, 80))
+def test_bisect_accounts_for_every_row_exactly_once(offsets: list[int], threshold: int) -> None:
+    days = [ORIGIN + timedelta(days=offset) for offset in offsets]
+    end = ORIGIN + timedelta(days=SPAN_DAYS)
+
+    def count_for(lower: date, upper: date) -> int:
+        return sum(lower <= day < upper for day in days)
+
+    pieces = bisect_counts(count_for, ORIGIN, end, len(days), threshold)
+
+    assert sum(count for _, _, count in pieces) == len(days)
+    for lower, upper, count in pieces:
+        assert ORIGIN <= lower < upper <= end
+        assert count == count_for(lower, upper) > 0
+        assert count <= threshold or upper - lower == timedelta(days=1)
+    for (_, first_end, _), (second_start, _, _) in pairwise(pieces):
+        assert first_end <= second_start
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    offsets=st.lists(st.one_of(st.none(), st.integers(0, 9000)), max_size=150),
+    threshold=st.integers(1, 40),
+)
+def test_bulk_search_returns_every_row_exactly_once(
+    client: PortalClient, offsets: list[int | None], threshold: int
+) -> None:
+    """The client is safe to share between examples; ENA and the checkpoint are not."""
+    rows = [
+        (f"ERR{index:05d}", None if offset is None else date(2000, 1, 1) + timedelta(days=offset))
+        for index, offset in enumerate(offsets)
+    ]
+    fake = FakeENA(rows)
+
+    with respx.mock, tempfile.TemporaryDirectory() as directory, warnings.catch_warnings():
+        # An unsplittable day warns by design; that is not what this checks.
+        warnings.simplefilter("ignore")
+        respx.get(COUNT_URL).mock(side_effect=fake.count)
+        respx.get(SEARCH_URL).mock(side_effect=fake.search)
+        frame = client.bulk_search(
+            "read_run", threshold=threshold, checkpoint_dir=directory, concurrency=2
+        )
+
+    returned = frame["run_accession"].to_list() if frame.height else []
+    assert sorted(returned) == [accession for accession, _ in rows]
+
+
+_maybe_dates = st.one_of(
+    st.none(), st.tuples(st.dates(), st.dates()).map(lambda pair: tuple(sorted(pair)))
+)
+
+
+@given(
+    query=st.one_of(st.none(), st.text(max_size=40)),
+    fields=st.one_of(st.none(), st.lists(st.text(min_size=1, max_size=12), max_size=4)),
+    parts=st.lists(
+        st.tuples(st.one_of(st.none(), st.text(max_size=20)), st.integers(0, 10**9), _maybe_dates),
+        max_size=6,
+    ),
+)
+def test_a_plan_survives_its_manifest_as_json(
+    query: str | None,
+    fields: list[str] | None,
+    parts: list[tuple[str | None, int, tuple[date, date] | None]],
+) -> None:
+    plan = BulkPlan(
+        result="read_run",
+        query=query,
+        fields=tuple(fields) if fields is not None else None,
+        partition_field="first_public",
+        threshold=50_000,
+        total=sum(count for _, count, _ in parts),
+        covered=sum(count for _, count, _ in parts),
+        partitions=tuple(
+            Partition(
+                index=index,
+                query=part_query,
+                count=count,
+                start=bounds[0] if bounds else None,
+                end=bounds[1] if bounds else None,
+            )
+            for index, (part_query, count, bounds) in enumerate(parts)
+        ),
+    )
+
+    assert BulkPlan.from_dict(json.loads(json.dumps(plan.to_dict()))) == plan

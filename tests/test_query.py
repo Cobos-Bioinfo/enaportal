@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from enaportal._query import extract_field_names
 
@@ -34,3 +36,20 @@ def test_an_operator_inside_a_quoted_value_is_not_a_field() -> None:
 
 def test_a_function_argument_is_not_a_field() -> None:
     assert extract_field_names("geo_box(10,20,30,40) AND tax_eq(9606)") == []
+
+
+_names = st.from_regex(r"[a-z][a-z0-9_]{0,15}", fullmatch=True).filter(
+    lambda name: name not in {"and", "or", "not"}
+)
+_literals = st.text(
+    alphabet=st.characters(blacklist_characters='"\\', blacklist_categories=("Cs",)), max_size=30
+)
+
+
+@given(st.lists(st.tuples(_names, _literals), min_size=1, max_size=5))
+def test_nothing_inside_a_quoted_literal_is_taken_for_a_field(
+    clauses: list[tuple[str, str]],
+) -> None:
+    query = " AND ".join(f'{name}="{literal}"' for name, literal in clauses)
+
+    assert extract_field_names(query) == list(dict.fromkeys(name for name, _ in clauses))
