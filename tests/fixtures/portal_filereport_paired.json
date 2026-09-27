@@ -1,0 +1,19 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "filereport",
+ "params": {
+  "accession": "ERR315859",
+  "result": "read_run",
+  "format": "tsv",
+  "fields": "run_accession,fastq_ftp,fastq_md5,fastq_bytes,submitted_ftp,submitted_md5,submitted_bytes"
+ },
+ "json": null,
+ "status": 200,
+ "content_type": "text/plain",
+ "body": [
+  "run_accession\tfastq_ftp\tfastq_md5\tfastq_bytes\tsubmitted_ftp\tsubmitted_md5\tsubmitted_bytes",
+  "ERR315859\tftp.sra.ebi.ac.uk/vol1/fastq/ERR315/ERR315859/ERR315859_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/ERR315/ERR315859/ERR315859_2.fastq.gz\t5bed3016d7a3f0cc82426ae96f93a86c;3842517e58daefeb7473176e74d93344\t3277487044;3401873895\tftp.sra.ebi.ac.uk/vol1/run/ERR315/ERR315859/APY_BOSE_4_1_62JUVAAXX_clean.fastq.gz;ftp.sra.ebi.ac.uk/vol1/run/ERR315/ERR315859/APY_BOSE_4_2_62JUVAAXX_clean.fastq.gz\tf807ce118b11479ba7f515f26c58bab2;753eeeecb2b87f6a945aa2be0a436e76\t3129549736;3252513828",
+  ""
+ ]
+}

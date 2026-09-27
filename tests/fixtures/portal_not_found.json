@@ -1,0 +1,12 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "no_such_endpoint",
+ "params": {},
+ "json": null,
+ "status": 404,
+ "content_type": "application/json",
+ "body": [
+  "{\"timestamp\":1790514799911,\"status\":404,\"error\":\"Not Found\",\"path\":\"/ena/portal/api/no_such_endpoint\"}"
+ ]
+}

@@ -1,0 +1,15 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "count",
+ "params": {
+  "result": "read_run",
+  "query": "not_a_field=1"
+ },
+ "json": null,
+ "status": 500,
+ "content_type": "text/plain",
+ "body": [
+  "Unknown search field:not_a_field"
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "search",
+ "params": {
+  "result": "read_run",
+  "query": "secondary_study_accession=SRP265601",
+  "fields": "run_accession,study_title,fastq_ftp,fastq_md5,fastq_bytes",
+  "limit": "3",
+  "format": "tsv"
+ },
+ "json": null,
+ "status": 200,
+ "content_type": "text/plain",
+ "body": [
+  "run_accession\tstudy_title\tfastq_ftp\tfastq_md5\tfastq_bytes",
+  "SRR11907267\tDraft genome sequence of \"Candidatus Phytoplasma pruni\"\tftp.sra.ebi.ac.uk/vol1/fastq/SRR119/067/SRR11907267/SRR11907267_1.fastq.gz;ftp.sra.ebi.ac.uk/vol1/fastq/SRR119/067/SRR11907267/SRR11907267_2.fastq.gz\taa8a93ab6a9df8e613f6715ba767cf0a;9773616064fbb43a9d77ccf166e4add6\t237314647;266801340",
+  ""
+ ]
+}

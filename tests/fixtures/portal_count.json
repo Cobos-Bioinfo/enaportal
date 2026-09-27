@@ -1,0 +1,17 @@
+{
+ "api": "portal",
+ "method": "GET",
+ "path": "count",
+ "params": {
+  "result": "read_run",
+  "query": "tax_tree(4932)"
+ },
+ "json": null,
+ "status": 200,
+ "content_type": "text/plain",
+ "body": [
+  "count",
+  "276447",
+  ""
+ ]
+}
