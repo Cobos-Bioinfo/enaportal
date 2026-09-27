@@ -62,6 +62,8 @@ for field in fields:
 - Invariants over generated inputs use Hypothesis, checked against an oracle
   rather than a restatement of the code.
 - CI enforces a 90% line and branch coverage floor, set in `pyproject.toml`.
+- Examples in the README and `docs/` are checked by `tests/test_docs.py`
+  against the real signatures and parser. Show only real output in them.
 
 ## Commits and branches
 
@@ -85,6 +87,8 @@ uv run pytest -m live    # live API tests
 uv run python scripts/update_snapshot.py --check  # report schema drift against ENA
 uv run python scripts/update_snapshot.py  # refresh the offline schema snapshot
 uv run python scripts/record_fixtures.py  # re-record the replayed ENA responses
+uv run --group docs mkdocs serve           # preview the documentation site
+uv run --group docs mkdocs build --strict  # build it as CI does
 uv build                 # distributions
 ```
 

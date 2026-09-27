@@ -83,7 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     # Also accepted after the subcommand. SUPPRESS keeps the subcommand from
     # resetting a --quiet given before it.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-q", "--quiet", action="store_true", default=argparse.SUPPRESS)
+    common.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="hide warnings and progress",
+    )
 
     output = argparse.ArgumentParser(add_help=False)
     output.add_argument("-o", "--output", metavar="PATH", help="write to PATH instead of stdout")

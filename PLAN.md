@@ -24,8 +24,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M7 CLI | done 2026-09-27 |
 | M8 Test suite | done 2026-09-27 |
 | M9 Schema-drift workflow | done 2026-09-27 |
-| M10 Documentation | **next** |
-| M11 Release | not started |
+| M10 Documentation | done 2026-09-27 |
+| M11 Release | **next** |
 
 Append to the status log at the bottom when a milestone closes.
 
@@ -222,6 +222,9 @@ assuming any still hold, but do not re-probe as a matter of course.
 | Streams can be cut short | `/tsv/textsearch?query=Saccharomyces&result=sequence`, 1,248,884 hits, aborted at the same byte, 220,686, with and without `limit=5000`: HTTP 200 and then a truncated chunked body. httpx raises `RemoteProtocolError` from inside the line iterator, after the request has returned |
 | Portal rejections | **HTTP 400, plain text**, probed 2026-09-27: unknown return field (`Invalid fieldName(s) supplied`), unknown result, malformed query, `offset`. None came back as HTTP 200. The only HTTP 200 rejection seen anywhere is the Browser's text search `<error>` |
 | Unknown search field on `/count` | **HTTP 500**, plain text `Unknown search field:not_a_field`. A query error reported as a server fault, so it must not be retried like one |
+| Text equality | **Not exact.** Probed 2026-09-27: `study_title="ocean"` matched 53,404 `read_study` records and `study_title="*ocean*"` 75,924, so `=` on a text field matches something looser than the whole value, perhaps a word. Not characterised further; the docs say only that `*` is a wildcard |
+| `tax_eq` and `tax_tree` | `tax_eq(4932)` is the taxon alone, 255,970 `read_run` rows; `tax_tree(4932)` adds its descendants, 276,447 |
+| Default Portal columns | Omitting `fields` returns the accession and `description`, e.g. `run_accession, description` for `read_run`; `read_study` adds `run_accession` |
 | Denormalised rows | A `read_run` row carries `experiment_accession`, `sample_accession`, `secondary_sample_accession`, `study_accession`, `secondary_study_accession`, `submission_accession`, `tax_id`. `analysis` adds `related_analysis_accession`, `sample` adds `related_sample_accession`. Navigation needs no extra endpoint |
 
 **The three facts that shape the architecture:** no `offset` and no
@@ -385,6 +388,10 @@ mkdocs-material. Quickstart, a page explaining the missing-pagination problem
 and how partitioning solves it, API reference, and honest positioning against
 `pysradb` and `ffq` so users pick the right tool.
 
+Shipped with a guide page per feature, a generated command reference, tests
+that hold every documented example to the real API, and GitHub Pages
+publishing; see the status log.
+
 ### M11. Release
 *Depends on: everything.*
 
@@ -458,6 +465,53 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-27, M10.** A mkdocs-material site under `docs/`: home, getting
+  started, six guides (searching, bulk retrieval, files and manifests, records
+  and text search, command line, errors and limits), a comparison page, six
+  reference pages and a development page. `.github/workflows/docs.yml` builds
+  it in strict mode on every pull request and publishes it to GitHub Pages from
+  `main`, at <https://cobos-bioinfo.github.io/enaportal/>. Pages is set to
+  deploy from Actions.
+  The bulk page is the one the plan asked for by name. It explains the missing
+  cursor, then shows the real bisection of `tax_tree(4932)` as it ran on
+  2026-09-27, marking which ranges were counted and which were subtracted: 8
+  partitions from 10 `/count` requests. Every output shown anywhere on the site
+  is real, either run live that day or rendered offline from the recorded
+  fixtures. Invented tables crept into a first draft and were replaced.
+  The comparison page was written from pysradb's and ffq's own source, read
+  2026-09-27. pysradb's ENA search is `read_run` only, built from fixed flags,
+  20 hits by default; its metadata comes from NCBI E-utilities, with ENA's
+  `filereport` for FASTQ URLs. ffq takes accessions only, returns JSON, and
+  last released 0.3.1 in March 2024. The page says when to use each instead,
+  which is what "honest" meant.
+  **Examples are tested.** `tests/test_docs.py` parses every Python block in
+  the README and the site, and checks each call to an enaportal function,
+  class or method, including methods of a client held in a `with` block,
+  against the real signature. Every `enaportal` line in a shell block goes
+  through the real parser. Both were checked by planting a typo of each kind.
+  It found a README example using `PortalClient` without importing it.
+  **The command reference is generated.** `scripts/docs_hooks.py`, an MkDocs
+  hook, renders `build_parser()`'s help into `reference/cli.md` at build time.
+  argparse lays help out differently in each Python version, so CI builds on
+  3.13, and 3.14 colours it in a terminal, so escapes are stripped. Rendering it
+  showed that `-q` had no help text under any subcommand; it now has.
+  Signatures showed `DEFAULT_THRESHOLD` and `Format` rather than what they
+  mean, so the public constants and `Literal` aliases are rendered on the
+  reference pages and the signatures link to them. Three docstrings named
+  milestones ("M5's partitioning"), which mean nothing on a public page; they
+  were reworded. Polars' Sphinx inventory lists `DataFrame`'s methods but not
+  the class, so it cannot link return types and was dropped.
+  Two tooling traps. The Material team announced in 2026 that MkDocs 2.0 drops
+  the plugin system, mkdocstrings included; mkdocs-material 9.7 pins
+  `mkdocs<2`, so the lockfile is safe. The way out when it is needed is
+  Zensical, the Material team's successor, which reads `mkdocs.yml`; it was at
+  0.0.65 on 2026-09-24, too young to move to. And ruff formats Python blocks
+  inside Markdown, so CI's format check now covers the docs: examples must be
+  ruff-clean, and ENA queries that are not Python go in `text` blocks.
+  The README stays whole rather than shrinking to a pointer. It is the PyPI
+  page, and the cut order names it as the fallback documentation, so the
+  overlap with the site is deliberate.
 
 - **2026-09-27, M9.** `.github/workflows/schema-drift.yml`, run every Monday
   and on demand, with two jobs. One compares ENA's live schema with the
