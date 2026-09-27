@@ -22,8 +22,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M5 Resumable bulk retrieval | done 2026-09-26 |
 | M6 Browser API | done 2026-09-27 |
 | M7 CLI | done 2026-09-27 |
-| M8 Test suite | **next** |
-| M9 Schema-drift workflow | not started |
+| M8 Test suite | done 2026-09-27 |
+| M9 Schema-drift workflow | **next** |
 | M10 Documentation | not started |
 | M11 Release | not started |
 
@@ -178,7 +178,7 @@ assuming any still hold, but do not re-probe as a matter of course.
 | nf-core/fetchngs input | A plain list of accessions, one per line. Accepts run, experiment, sample, study, GEO and BioSample identifiers |
 | Result ordering | **Not guaranteed and not reproducible.** Six identical `limit=5` requests returned four different row sets, with repeats among them. Consistent with load balancing across backends that disagree, so instability cannot be asserted in a test, only relied on never |
 | `read_run` date search fields | `first_created`, `first_public`, `last_updated` |
-| `offset` | **Rejected**, GET and POST, body `Unsupported param offset` |
+| `offset` | **Rejected**, GET and POST, HTTP 400 with the plain-text body `Unsupported param offset` |
 | `sortFields` | **Rejected**, HTTP 400 |
 | `limit=0` | Returns everything in one response. `tax_tree(4932)` read_run: 276,447 rows, 3.1 MB, 34.6 s |
 | `/count` | Cheap, accepts the full query grammar including date ranges |
@@ -220,6 +220,8 @@ assuming any still hold, but do not re-probe as a matter of course.
 | Text search errors | HTTP 200 with a body of `<error>message</error>`, whatever format was asked for |
 | Text search count | `/{format}/textsearch/count?query=&result=` returns JSON `{"count": "48"}`, a string. The format segment matters: `xml` rejects `result=sequence`, `tsv` accepts every result |
 | Streams can be cut short | `/tsv/textsearch?query=Saccharomyces&result=sequence`, 1,248,884 hits, aborted at the same byte, 220,686, with and without `limit=5000`: HTTP 200 and then a truncated chunked body. httpx raises `RemoteProtocolError` from inside the line iterator, after the request has returned |
+| Portal rejections | **HTTP 400, plain text**, probed 2026-09-27: unknown return field (`Invalid fieldName(s) supplied`), unknown result, malformed query, `offset`. None came back as HTTP 200. The only HTTP 200 rejection seen anywhere is the Browser's text search `<error>` |
+| Unknown search field on `/count` | **HTTP 500**, plain text `Unknown search field:not_a_field`. A query error reported as a server fault, so it must not be retried like one |
 | Denormalised rows | A `read_run` row carries `experiment_accession`, `sample_accession`, `secondary_sample_accession`, `study_accession`, `secondary_study_accession`, `submission_accession`, `tax_id`. `analysis` adds `related_analysis_accession`, `sample` adds `related_sample_accession`. Navigation needs no extra endpoint |
 
 **The three facts that shape the architecture:** no `offset` and no
@@ -229,7 +231,9 @@ last workaround: you cannot page, diff or reproducibly sample on top of `limit`
 alone, so M5 must partition by query range and never by row position. And ENA
 returns some errors as plain text with **HTTP 200**, so status-code checking
 alone is insufficient; body sniffing belongs in the HTTP layer (M1), not bolted
-on later.
+on later. By 2026-09-27 every Portal rejection probed had moved to HTTP 400,
+but the Browser's text search still answers 200 with an error, so the sniffing
+stays.
 
 **The fact that made M5 work:** date ranges are half-open. Partitions that
 share a boundary tile exactly, so one child of a bisection can be counted and
@@ -361,6 +365,9 @@ Recorded HTTP fixtures for the offline suite, a small set of `-m live` contract
 tests. Concentrate coverage on query building and partitioning, which is where
 the bugs will be. Transport plumbing needs less.
 
+Shipped with property-based tests and a coverage floor as well; see the status
+log.
+
 ### M9. Schema-drift workflow
 *Depends on: M2.*
 
@@ -449,6 +456,43 @@ as TSV). `enaportal` subsumes it once M12 lands.
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
 
+- **2026-09-27, M8.** Most of the suite already existed, built milestone by
+  milestone, so M8 added what hand-written tests cannot give.
+  **Recorded responses.** `scripts/record_fixtures.py` captures 21 real
+  exchanges into `tests/fixtures`, from a count to a misreported 500, and
+  `tests/recorded.py` replays them with respx. Every replay also asserts the
+  library still sends the request the fixture was recorded from, so a response
+  can never end up vouching for a request that no longer exists; changing the
+  request fails the test and says to re-record. Bodies are stored one line per
+  array element so that a re-recording's diff reads as what ENA changed, and a
+  test checks the recorder's list and the directory agree. A hundred lines of
+  recorder beat vcrpy here, because respx is already the mocking layer and a
+  second one would patch httpx differently.
+  **Property tests** with Hypothesis, each against an oracle rather than a copy
+  of the code: bisection over random histories with heavy single-day clusters
+  (disjoint, in range, recounts exact, under the threshold unless a single
+  day); `bulk_search` end to end against the fake ENA with undated rows (every
+  row exactly once); the XML record counter and batch merge over randomly
+  nested and indented documents; file unpacking with checksum and size lists
+  longer or shorter than the paths; quoted literals in field extraction; and a
+  plan's manifest through JSON.
+  Also the concurrent failure path of a bulk fetch, which only the serial kill
+  had exercised, and a parity test holding every module-level helper to the
+  signature and defaults of the method it wraps. Coverage is 95% of lines and
+  branches, with a 90% floor in `pyproject.toml` that CI enforces.
+  What it found. Hypothesis shrank a checksum bug to one file and an empty md5
+  cell: the empty cell split to `[""]`, so the first file got an md5 of `""`
+  while the second got null. Empty now means null throughout. Recording found
+  that `/count` answers an unknown search field with **HTTP 500**, which the
+  client retried three times before reporting a server fault; that one
+  message is now an immediate `ENAQueryError`, matched narrowly so a genuine
+  500 is still retried. Recording also found that no Portal rejection comes
+  back as HTTP 200 any more, `offset` included, although M1's tests used it as
+  the example. And the XML replay showed `fetch` adds a final newline where
+  ENA sends none, so M6's "bytes untouched" was true line for line only.
+  Live tests still run only by hand; CI skips them by design. M9 is what runs
+  them on a schedule.
+
 - **2026-09-27, M7.** `cli.py`, an `argparse` layer with ten subcommands, the
   `enaportal` console script restored, and `python -m enaportal`. Tables go to
   stdout as ENA's own unquoted TSV; warnings, progress and errors go to stderr,
@@ -505,8 +549,9 @@ surprising that a later session would otherwise rediscover the hard way.
   Over 10,000 accessions go out in batches, and XML batches are merged into one
   document, since each is its own `<X_SET>` and concatenation would give several
   roots. The merge runs only when there is more than one batch, so the common
-  case passes ENA's bytes through untouched and a layout change can break only
-  the rare case, loudly. `fetch_to_file` writes to a temporary file and renames
+  case passes ENA's lines through unchanged (M8 found a final newline is added
+  where ENA's XML has none) and a layout change can break only the rare case,
+  loudly. `fetch_to_file` writes to a temporary file and renames
   it into place, because a truncated FASTA looks exactly like a complete one.
   Two holes in M1 surfaced and were fixed there. A body cut short mid-stream
   escaped as a raw `httpx.RemoteProtocolError`, raised from inside the line
