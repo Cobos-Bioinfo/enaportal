@@ -6,6 +6,7 @@ are inspected here rather than trusted by callers.
 
 from __future__ import annotations
 
+import html
 import json
 import random
 import re
@@ -25,6 +26,7 @@ from enaportal._version import __version__
 from enaportal.errors import (
     ENAConnectionError,
     ENAHTTPError,
+    ENANotFoundError,
     ENAQueryError,
     ENARateLimitError,
     ENATimeoutError,
@@ -74,6 +76,18 @@ _ERROR_OPENINGS = re.compile(
     re.IGNORECASE,
 )
 
+# The Browser API's text search wraps its HTTP 200 rejections in a bare
+# <error> element rather than answering in the format that was asked for.
+_ERROR_ELEMENT = re.compile(r"^<error>(.*)</error>$", re.DOTALL)
+
+# The Browser API's error bodies are Spring Boot ErrorDetails serialised to
+# match the request: XML on /xml, key=value lines on /embl and /fasta, JSON on
+# a batch POST. JSON is parsed; these cover the other two.
+_ERROR_MESSAGE = (
+    re.compile(r"<message>(.*?)</message>", re.DOTALL),
+    re.compile(r"^message=(.*)$", re.MULTILINE),
+)
+
 
 def sniff_text_error(first_line: str, shape: ResponseShape) -> str | None:
     """Return the message if this HTTP 200 body is really an ENA rejection.
@@ -86,6 +100,9 @@ def sniff_text_error(first_line: str, shape: ResponseShape) -> str | None:
     stripped = first_line.strip()
     if not stripped:
         return None
+    element = _ERROR_ELEMENT.match(stripped)
+    if element is not None:
+        return html.unescape(element.group(1).strip()) or stripped
     if shape == "json":
         return None if stripped[0] in "[{" else stripped
     return stripped if _ERROR_OPENINGS.match(stripped) else None
@@ -216,6 +233,7 @@ class ENAHTTPClient:
         method: str = "GET",
         params: Params | None = None,
         data: Params | None = None,
+        json_body: Any = None,
         shape: ResponseShape = "tsv",
     ) -> Iterator[Iterator[str]]:
         """Stream a response line by line without holding it all in memory.
@@ -223,10 +241,10 @@ class ENAHTTPClient:
         The first line is read eagerly so that an HTTP 200 rejection raises here
         rather than reaching a TSV parser as a bogus header.
         """
-        request = self._build_request(method, path, params=params, data=data)
+        request = self._build_request(method, path, params=params, data=data, json_body=json_body)
         response = self._send(request, stream=True)
         try:
-            lines = response.iter_lines()
+            lines = _guarded(response.iter_lines(), request)
             first = next(lines, None)
             if first is None:
                 yield iter(())
@@ -245,12 +263,14 @@ class ENAHTTPClient:
         *,
         params: Params | None = None,
         data: Params | None = None,
+        json_body: Any = None,
     ) -> httpx.Request:
         return self._client.build_request(
             method,
             path,
             params=_clean(params),
             data=_clean(data),
+            json=json_body,
         )
 
     def _read(self, request: httpx.Request, *, shape: ResponseShape) -> str:
@@ -343,18 +363,63 @@ def _client_error(
     response: httpx.Response, request: httpx.Request, body: str
 ) -> ENAQueryError | ENAHTTPError:
     """Pick the exception for a 4xx. ENA uses 400 for a malformed query."""
+    detail = _error_message(body)
     if response.status_code in (400, 422):
         return ENAQueryError(
-            body.strip() or f"ENA rejected the query with HTTP {response.status_code}",
+            detail or body.strip() or f"ENA rejected the query with HTTP {response.status_code}",
             url=str(request.url),
             body=body,
         )
-    return ENAHTTPError(
-        f"ENA returned HTTP {response.status_code} for {request.url}",
+    error = ENANotFoundError if response.status_code == 404 else ENAHTTPError
+    message = f"ENA returned HTTP {response.status_code} for {request.url}"
+    return error(
+        f"{message}: {detail}" if detail else message,
         status_code=response.status_code,
         url=str(request.url),
         body=body,
     )
+
+
+def _error_message(body: str) -> str | None:
+    """ENA's own explanation out of a structured error body, if it gave one."""
+    stripped = body.strip()
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(message, str):
+            return None
+        return message.strip() or None
+    for pattern in _ERROR_MESSAGE:
+        match = pattern.search(stripped)
+        if match is not None and match.group(1).strip():
+            return html.unescape(match.group(1).strip())
+    return None
+
+
+def _guarded(lines: Iterator[str], request: httpx.Request) -> Iterator[str]:
+    """Raise a failure part way through a streamed body as an ENAError.
+
+    ENA can abort a response after sending some of it, and httpx only notices
+    while the caller is iterating, long after _send has returned. It is not
+    retried: the lines already read have been handed on.
+    """
+    read = 0
+    try:
+        for line in lines:
+            yield line
+            read += 1
+    except httpx.TimeoutException as exc:
+        raise ENATimeoutError(
+            f"Response from {request.url} stalled after {read} lines: {exc}"
+        ) from exc
+    except httpx.TransportError as exc:
+        raise ENAConnectionError(
+            f"ENA cut the response from {request.url} short after {read} lines: {exc}",
+            url=str(request.url),
+        ) from exc
 
 
 def _drain(response: httpx.Response) -> str:

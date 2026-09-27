@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Iterator
 
@@ -15,11 +16,13 @@ from enaportal._http import (
     RATE_LIMIT_MIN_BACKOFF,
     ENAHTTPClient,
     RateLimiter,
+    ResponseShape,
     sniff_text_error,
 )
 from enaportal.errors import (
     ENAConnectionError,
     ENAHTTPError,
+    ENANotFoundError,
     ENAQueryError,
     ENARateLimitError,
     ENATimeoutError,
@@ -216,6 +219,58 @@ def test_http_400_becomes_a_query_error(client: ENAHTTPClient) -> None:
 
 
 @respx.mock
+def test_http_404_is_a_not_found_error(client: ENAHTTPClient) -> None:
+    body = '{"timestamp": 1, "status": 404, "error": "Not Found", "path": "/ena/portal/api/x"}'
+    respx.get(COUNT_URL).mock(return_value=httpx.Response(404, text=body))
+
+    with pytest.raises(ENANotFoundError) as caught:
+        client.get_text("count")
+
+    assert caught.value.status_code == 404
+    assert isinstance(caught.value, ENAHTTPError)
+
+
+@respx.mock
+def test_http_404_carries_enas_message_when_it_sent_one(client: ENAHTTPClient) -> None:
+    body = '{"status": 404, "message": "Failed to get response from SRA API. Response code 404"}'
+    respx.get(COUNT_URL).mock(return_value=httpx.Response(404, text=body))
+
+    with pytest.raises(ENANotFoundError, match="Failed to get response from SRA API"):
+        client.get_text("count")
+
+
+# The Browser API serialises one error to match the format that was asked for.
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            '<?xml version="1.0" encoding="UTF-8"?>\n<ErrorDetails>\n  <status>400</status>\n'
+            "  <message>Invalid result type &apos;nope&apos;.</message>\n</ErrorDetails>\n",
+            "Invalid result type 'nope'.",
+        ),
+        (
+            "timestamp=1\nstatus=400\nerror=Bad Request\n"
+            "message=Format embl is not available for record PRJEB1787\npath=/x\n",
+            "Format embl is not available for record PRJEB1787",
+        ),
+        (
+            '{"status": 400, "error": "Bad Request", "message": "All accessions must match"}',
+            "All accessions must match",
+        ),
+    ],
+)
+@respx.mock
+def test_http_400_reports_enas_own_message(client: ENAHTTPClient, body: str, message: str) -> None:
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(400, text=body))
+
+    with pytest.raises(ENAQueryError) as caught:
+        client.get_text("search")
+
+    assert str(caught.value) == message
+    assert caught.value.body == body
+
+
+@respx.mock
 def test_retries_connection_errors(client: ENAHTTPClient, slept: list[float]) -> None:
     route = respx.get(COUNT_URL).mock(
         side_effect=[
@@ -316,6 +371,55 @@ def test_post_sends_a_form_body(client: ENAHTTPClient) -> None:
     assert route.calls[0].request.content == b"result=read_run&limit=0"
 
 
+@respx.mock
+def test_stream_lines_can_post_a_json_body(client: ENAHTTPClient) -> None:
+    route = respx.post(SEARCH_URL).mock(return_value=httpx.Response(200, text="<RUN_SET>\n"))
+
+    with client.stream_lines(
+        "search", method="POST", json_body={"accessions": ["ERR1"]}, shape="text"
+    ) as lines:
+        list(lines)
+
+    request = route.calls[0].request
+    assert request.headers["content-type"] == "application/json"
+    assert json.loads(request.content) == {"accessions": ["ERR1"]}
+
+
+class _CutShort(httpx.SyncByteStream):
+    """A body that stops part way, the way ENA aborts a long text search."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b"accession\tdescription\nERR1\tone\n"
+        raise self.error
+
+
+@respx.mock
+def test_a_body_cut_short_raises_a_connection_error(client: ENAHTTPClient) -> None:
+    error = httpx.RemoteProtocolError("peer closed connection without sending complete body")
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, stream=_CutShort(error)))
+
+    with (
+        pytest.raises(ENAConnectionError, match="short after 2 lines"),
+        client.stream_lines("search") as lines,
+    ):
+        list(lines)
+
+
+@respx.mock
+def test_a_body_that_stalls_raises_a_timeout(client: ENAHTTPClient) -> None:
+    error = httpx.ReadTimeout("timed out")
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, stream=_CutShort(error)))
+
+    with (
+        pytest.raises(ENATimeoutError, match="stalled after 2 lines"),
+        client.stream_lines("search") as lines,
+    ):
+        list(lines)
+
+
 def test_negative_retries_are_rejected() -> None:
     with pytest.raises(ValueError, match="max_retries"):
         ENAHTTPClient(max_retries=-1)
@@ -344,10 +448,19 @@ def test_sniffer_flags_ena_rejections(body: str) -> None:
         "invalid_reason\tstatus",
         ">ENA|A00145|A00145.1 description",
         "ID   A00145; SV 1; linear; DNA;",
+        "<RUN_SET>",
+        '<?xml version="1.0" encoding="UTF-8"?>',
     ],
 )
 def test_sniffer_passes_real_payloads(body: str) -> None:
     assert sniff_text_error(body, "tsv") is None
+
+
+@pytest.mark.parametrize("shape", ["tsv", "text", "json"])
+def test_sniffer_unwraps_the_text_search_error_element(shape: ResponseShape) -> None:
+    body = "<error>Invalid result type &apos;nonsense&apos;.</error>"
+
+    assert sniff_text_error(body, shape) == "Invalid result type 'nonsense'."
 
 
 def test_the_limiter_does_not_delay_a_lone_request() -> None:

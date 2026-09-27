@@ -33,6 +33,10 @@ class ENARateLimitError(ENAHTTPError):
     """ENA returned HTTP 429 and the request still failed after backing off."""
 
 
+class ENANotFoundError(ENAHTTPError):
+    """ENA returned HTTP 404, which the Browser API uses for an unknown accession."""
+
+
 class ENAQueryError(ENAError):
     """ENA rejected the query.
 
@@ -63,6 +67,7 @@ __all__ = [
     "ENAConnectionError",
     "ENAError",
     "ENAHTTPError",
+    "ENANotFoundError",
     "ENAQueryError",
     "ENARateLimitError",
     "ENASchemaError",
