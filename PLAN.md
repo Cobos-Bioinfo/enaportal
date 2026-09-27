@@ -20,8 +20,8 @@ infrastructure for a wider portfolio, not its centrepiece.
 | M3 search and count | done 2026-09-26 |
 | M4 filereport, related, manifests | done 2026-09-26 |
 | M5 Resumable bulk retrieval | done 2026-09-26 |
-| M6 Browser API | **next** |
-| M7 CLI | not started |
+| M6 Browser API | done 2026-09-27 |
+| M7 CLI | **next** |
 | M8 Test suite | not started |
 | M9 Schema-drift workflow | not started |
 | M10 Documentation | not started |
@@ -154,8 +154,8 @@ unverified claim on these pages may be stale.
 
 ## Verified API facts
 
-Probed live 2026-09-26. Recheck before assuming any still hold, but do not
-re-probe as a matter of course.
+Probed live 2026-09-26, the Browser API rows 2026-09-27. Recheck before
+assuming any still hold, but do not re-probe as a matter of course.
 
 | Fact | Value |
 |---|---|
@@ -182,7 +182,7 @@ re-probe as a matter of course.
 | `sortFields` | **Rejected**, HTTP 400 |
 | `limit=0` | Returns everything in one response. `tax_tree(4932)` read_run: 276,447 rows, 3.1 MB, 34.6 s |
 | `/count` | Cheap, accepts the full query grammar including date ranges |
-| OpenAPI spec | None. `/v3/api-docs`, `/v2/api-docs`, `/swagger.json` all 404 |
+| OpenAPI spec | None for the Portal. `/v3/api-docs`, `/v2/api-docs`, `/swagger.json` all 404. The Browser API **does** have one, see below |
 | Rate limit | **50 requests per second**, documented, across the discovery and retrieval APIs. Excess is rejected with HTTP 429 |
 | Rate-limit headers | None returned, and no documented `Retry-After` |
 | Retired endpoints | `data/warehouse/search`, `data/view`, `data/warehouse/filereport` all 301 to the browser homepage |
@@ -197,7 +197,7 @@ re-probe as a matter of course.
 | Submitted files | Keep the submitter's own filenames under `/vol1/run/`, unrelated to the run accession |
 | FTP roots | Reads and analyses `ftp://ftp.sra.ebi.ac.uk/vol1/`, assembled and annotated sequences `ftp://ftp.ebi.ac.uk/pub/databases/ena/` |
 | xref service | `https://www.ebi.ac.uk/ena/xref/rest/{tsv,json}/...`, and it **does** support `offset` and `limit`. Pagination exists there but not on the Portal |
-| Browser `links` | `/{format}/links/{study\|sample\|taxon}?accession=&result=`. Both parameters are required and neither is documented; omitting one gives an opaque Spring Boot 400. Returned 882 KB of XML for one study |
+| Browser `links` | `/{format}/links/{study\|sample\|taxon}?accession=&result=`. Both parameters are required and neither is documented; omitting one gives an opaque Spring Boot 400. Returned 882 KB of XML for one study. ENA's own OpenAPI spec says it "does not produce up to date ENA data" |
 | Primary and secondary accessions | One object has both forms, e.g. study `PRJEB1787` and `ERP001736`. The Portal exposes both as separate columns, so anything taking an accession must accept either |
 | Date ranges are **half-open** | `f>=A AND f<=B` selects `A <= f < B`. Probed 2026-09-26: 2020 whole year 15,070, `[Jan1,Jun30)` 7,905, `[Jul1,Dec31)` 7,089, which do not sum; `[Jan1,Jul1)` 7,981 and `[Jul1,Jan1)` 7,089 do. This is a gift, not a trap: adjacent partitions sharing a boundary tile a range exactly, with no day arithmetic |
 | Date operators | `<` and `<=` are the same operator, and so are `>` and `>=`. `f=2020-06-30` returns **0** even for rows displaying that exact value, so equality on a date is useless |
@@ -205,6 +205,21 @@ re-probe as a matter of course.
 | `AND` binds tighter than `OR` | Appending a range to `a OR b` restricts only `b`. Unparenthesised, one probe returned 8,596,605 rows where the bracketed form returned 59,553. **Always parenthesise a caller's query before composing onto it** |
 | `NOT` | An exact set complement, including rows the inner clause cannot reach. `q AND NOT (range)` plus `q AND range` equals `q`, verified at 261,377 + 15,070 = 276,447 |
 | Date search field coverage | Every result type has one except **`taxon`**, which has 13 search fields and no date, no orderable number. `assembly` has only `last_updated` |
+| Browser OpenAPI | `browser/api/v3/api-docs`, OpenAPI 3, version 1.1. Lists far more than records and text search: `livelist`, `changelog`, `versions`, `summary`, `gff3`, `ebisearch` |
+| Browser batch fetch | `POST /{xml,embl,fasta}` with a JSON body `{"accessions": [...]}` and options such as `annotationOnly` and `lineLimit`. Documented ceiling of 10,000 accessions per request. A comma-joined GET path, `/xml/A,B`, also works |
+| Browser unknown accessions | **Silently dropped from a batch**: HTTP 200 without them. A batch with none found, or a single unknown accession, is a 404. A repeated accession is returned once per mention |
+| Browser data types | One per request. Mixing is a 400: `All accessions must be of the same data type as the first accession, which was PROJECT.` |
+| Browser errors | Real status codes, unlike the Portal: 400 for a malformed accession or a format the record lacks, 404 for an unknown one. The body is Spring Boot ErrorDetails serialised to match the request: XML on `/xml`, `key=value` lines on `/embl` and `/fasta`, JSON on a batch POST. Its `message` is the useful part. GET `/fasta/{run}` names the wrong format in it, "Format embl is not available"; POST names the right one |
+| Browser XML layout | One `<X_SET>` root per response, one child per record. Some types open with an XML declaration (taxon, sample) and some do not (run, study, project). Indentation is inconsistent, sample XML puts nested tags at column 0, and a taxon nests `<taxon>` elements inside its `<lineage>`. Count records by parsing, never by line shape |
+| Primary and secondary in the Browser | **Not interchangeable.** `PRJEB1787` returns a `PROJECT_SET`, its secondary `ERP001736` a `STUDY_SET` |
+| Browser record size | Unbounded. `/fasta/GCA_000146045.2` streams a whole yeast assembly; a human one would be gigabytes |
+| Browser `lineLimit` | Applies **per record**, not per response. `annotationOnly=true` drops the `SQ` block and keeps the `//` terminator |
+| Text search | `/{tsv,xml,embl,fasta}/textsearch?query=&result=&limit=&offset=`. `query` is a **query parameter**; the path form `/xml/textsearch/{query}` 404s. `result`, a Portal result name, or an EBI Search `domain` is required. `offset` works |
+| Text search TSV | Two columns, `accession` and `description`, **quoted** CSV style with inner quotes doubled. Every Portal TSV is unquoted |
+| Text search `limit` | Omitted returns every hit. **`limit=0` returns none**, the opposite of the Portal |
+| Text search errors | HTTP 200 with a body of `<error>message</error>`, whatever format was asked for |
+| Text search count | `/{format}/textsearch/count?query=&result=` returns JSON `{"count": "48"}`, a string. The format segment matters: `xml` rejects `result=sequence`, `tsv` accepts every result |
+| Streams can be cut short | `/tsv/textsearch?query=Saccharomyces&result=sequence`, 1,248,884 hits, aborted at the same byte, 220,686, with and without `limit=5000`: HTTP 200 and then a truncated chunked body. httpx raises `RemoteProtocolError` from inside the line iterator, after the request has returned |
 | Denormalised rows | A `read_run` row carries `experiment_accession`, `sample_accession`, `secondary_sample_accession`, `study_accession`, `secondary_study_accession`, `submission_accession`, `tax_id`. `analysis` adds `related_analysis_accession`, `sample` adds `related_sample_accession`. Navigation needs no extra endpoint |
 
 **The three facts that shape the architecture:** no `offset` and no
@@ -317,16 +332,21 @@ Module `enaportal/browser.py`. Records by accession as XML, EMBL or FASTA.
 Smaller surface than the Portal side, kept separate.
 
 Paths are all `/{format}/...` under `https://www.ebi.ac.uk/ena/browser/api/`:
-`/{format}/{accession}`, `/{format}/textsearch/{query}`,
-`/{format}/search/{query}` and `/{format}/links/{study|sample|taxon}`. XML
-covers study, sample, run, experiment, analysis and taxon; EMBL covers
-sequences, WGS and TSA sets; FASTA covers sequences.
+`/{format}/{accession}`, `/{format}/textsearch?query=`, `/{format}/search`
+and `/{format}/links/{study|sample|taxon}`. XML covers study, sample, run,
+experiment, analysis and taxon; EMBL covers sequences, WGS and TSA sets; FASTA
+covers sequences and assemblies.
+
+Shipped as `fetch()`, `fetch_to_file()`, `textsearch()` and
+`textsearch_count()`. `links` and `search` are deliberately not wrapped; see
+the status log.
 
 ### M7. CLI
 *Depends on: M3, M4, M6.*
 
 Thin `argparse` layer over the public API. Subcommands mirror the library:
-`search`, `count`, `filereport`, `related`, `fields`, `results`. TSV to stdout by
+`search`, `count`, `filereport`, `related`, `fields`, `results`, and from M6
+`fetch` and `textsearch`. TSV to stdout by
 default so it pipes. **Re-add the `[project.scripts]` entry point**, which was
 removed in M0 because the module did not exist and a broken console script is
 worse than none.
@@ -425,6 +445,47 @@ as TSV). `enaportal` subsumes it once M12 lands.
 
 Append one entry per closed milestone: date, what shipped, and anything
 surprising that a later session would otherwise rediscover the hard way.
+
+- **2026-09-27, M6.** `browser.py` with `BrowserClient.fetch()`,
+  `fetch_to_file()`, `textsearch()` and `textsearch_count()`, and the first,
+  third and fourth as module-level helpers. Records come back as text; parsing
+  XML or EMBL is left to whatever tool the caller already uses.
+  Unlike the Portal, the Browser API publishes an OpenAPI spec, and it lists far
+  more than M6 planned for. Scope was held to what the milestone named. Not
+  wrapped: `links`, which ENA's own spec says does not produce up to date data
+  and which `related()` already covers; `/{format}/search`, a Portal query that
+  returns records, whose FASTA form takes only two result types; and
+  `livelist`, `changelog`, `versions`, `summary`, `gff3` and `ebisearch`, which
+  nothing in the plan asked for.
+  The trap is M4's again, silent loss. A batch drops accessions ENA cannot find
+  and still answers 200. Looping is not the fix this time, because one request
+  per accession turns 10,000 records into 400 seconds at the rate limit. So
+  `fetch` counts records as they stream past, warns when fewer come back than
+  were asked for, and raises `ENANotFoundError` when none do. XML is counted
+  with a pull parser, not by line shape, because the layout varies by record
+  type and a taxon nests `<taxon>` inside its own lineage. EMBL and FASTA are
+  counted where a record starts, not at its `//`, so `line_limit` truncation
+  still counts. Repeats are dropped before sending: ENA returns a record once
+  per mention, and a duplicate would hide a missing one.
+  Over 10,000 accessions go out in batches, and XML batches are merged into one
+  document, since each is its own `<X_SET>` and concatenation would give several
+  roots. The merge runs only when there is more than one batch, so the common
+  case passes ENA's bytes through untouched and a layout change can break only
+  the rare case, loudly. `fetch_to_file` writes to a temporary file and renames
+  it into place, because a truncated FASTA looks exactly like a complete one.
+  Two holes in M1 surfaced and were fixed there. A body cut short mid-stream
+  escaped as a raw `httpx.RemoteProtocolError`, raised from inside the line
+  iterator long after `_send` returned; `search_to_file` and bulk partitions
+  were exposed to it too. It now raises `ENAConnectionError`, unretried, since
+  lines have already been handed on. And 4xx bodies were reported verbatim,
+  which for the Browser meant a whole ErrorDetails document in three
+  serialisations, so the `message` is now extracted. 404 became
+  `ENANotFoundError`, a subclass of `ENAHTTPError`, so code that caught the old
+  type still works.
+  Text search differs from the Portal in three ways that would each have
+  bitten: its TSV is quoted, `limit=0` means none rather than all, and its
+  rejections are `<error>` elements served with HTTP 200. `textsearch` defaults
+  to 100 hits and refuses 0.
 
 - **2026-09-26, M5.** `bulk.py` with `plan_partitions()` and `bulk_search()` on
   `PortalClient`, over `_checkpoint.py` for the on-disk state and a new
