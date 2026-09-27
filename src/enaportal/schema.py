@@ -64,7 +64,7 @@ class Field:
 
     @property
     def is_date(self) -> bool:
-        """Whether the field can be used as a date range, which M5 partitions on."""
+        """Whether the field can be used as a date range, which bulk retrieval partitions on."""
         return self.type == "date"
 
     @classmethod
@@ -126,7 +126,7 @@ class SchemaClient:
         return [Field.from_payload(row) for row in payload]
 
     def date_search_fields(self, result: str) -> list[Field]:
-        """Searchable date fields, which are M5's preferred partition keys."""
+        """Searchable date fields, the candidates for a bulk partition key."""
         return [field for field in self.search_fields(result) if field.is_date]
 
     def link_fields(self, result: str) -> list[Field]:

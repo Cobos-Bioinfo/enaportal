@@ -104,7 +104,7 @@ class PortalClient:
     ) -> int:
         """How many records match, without fetching any of them.
 
-        Cheap enough to call freely, which is what makes M5's partitioning work.
+        Cheap enough to call freely, which is what makes bulk partitioning work.
         """
         params = self._params(
             result,
