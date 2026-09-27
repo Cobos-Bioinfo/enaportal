@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from enaportal.errors import ENAQueryError
 from enaportal.files import file_urls, to_manifest
@@ -276,3 +278,48 @@ def test_an_unknown_format_is_rejected(runs: pl.DataFrame) -> None:
 
 def test_an_empty_frame_gives_an_empty_manifest() -> None:
     assert to_manifest(pl.DataFrame(), "aria2c") == ""
+
+
+_segments = st.from_regex(r"[A-Za-z0-9_.]{1,10}", fullmatch=True)
+_digests = st.from_regex(r"[0-9a-f]{4}", fullmatch=True)
+
+Run = tuple[str, list[str], list[str], list[int]]
+
+
+@st.composite
+def _runs(draw: st.DrawFn) -> list[Run]:
+    """Runs whose checksum and size lists may be shorter or longer than their paths."""
+    runs = []
+    for index in range(draw(st.integers(1, 6))):
+        paths = [
+            f"ftp.sra.ebi.ac.uk/vol1/{index}/{draw(_segments)}"
+            for _ in range(draw(st.integers(0, 4)))
+        ]
+        digests = draw(st.lists(_digests, max_size=len(paths) + 1))
+        sizes = draw(st.lists(st.integers(0, 10**12), max_size=len(paths) + 1))
+        runs.append((f"ERR{index}", paths, digests, sizes))
+    return runs
+
+
+@given(_runs())
+def test_every_file_keeps_its_own_checksum_and_size(runs: list[Run]) -> None:
+    table = frame(
+        run_accession=[accession for accession, _, _, _ in runs],
+        fastq_ftp=[";".join(paths) for _, paths, _, _ in runs],
+        fastq_md5=[";".join(digests) for _, _, digests, _ in runs],
+        fastq_bytes=[";".join(map(str, sizes)) for _, _, _, sizes in runs],
+    )
+
+    files = file_urls(table, source="fastq")
+
+    assert files.select("accession", "file_index", "url", "md5", "bytes").rows() == [
+        (
+            accession,
+            position,
+            f"https://{path}",
+            digests[position] if position < len(digests) else None,
+            sizes[position] if position < len(sizes) else None,
+        )
+        for accession, paths, digests, sizes in runs
+        for position, path in enumerate(paths)
+    ]

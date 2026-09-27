@@ -149,12 +149,15 @@ def _unpack(frame: pl.DataFrame, name: str, accession: str, protocol: Protocol) 
 def _positional(frame: pl.DataFrame, column: str) -> pl.Expr:
     """The value lining up with this file's position in the semicolon list.
 
-    Missing entirely, or shorter than the path list, both give null rather than
-    a value belonging to a different file.
+    A missing column, an empty cell or a list shorter than the paths all give
+    null rather than a value belonging to a different file.
     """
     if column not in frame.columns:
         return pl.lit(None, dtype=pl.String)
-    return pl.col(column).str.split(";").list.get(pl.col("file_index"), null_on_oob=True)
+    value = pl.col(column).str.split(";").list.get(pl.col("file_index"), null_on_oob=True)
+    # An empty cell splits to one empty string, which would otherwise reach the
+    # first file as a checksum of "".
+    return pl.when(value != "").then(value)
 
 
 def _populated(column: str) -> pl.Expr:
