@@ -6,6 +6,7 @@ are inspected here rather than trusted by callers.
 
 from __future__ import annotations
 
+import html
 import json
 import random
 import re
@@ -25,6 +26,7 @@ from enaportal._version import __version__
 from enaportal.errors import (
     ENAConnectionError,
     ENAHTTPError,
+    ENANotFoundError,
     ENAQueryError,
     ENARateLimitError,
     ENATimeoutError,
@@ -72,6 +74,14 @@ _ERROR_OPENINGS = re.compile(
     r"bad request|error|exception|internal server error"
     r")\b[\s:,]",
     re.IGNORECASE,
+)
+
+# The Browser API's error bodies are Spring Boot ErrorDetails serialised to
+# match the request: XML on /xml, key=value lines on /embl and /fasta, JSON on
+# a batch POST. JSON is parsed; these cover the other two.
+_ERROR_MESSAGE = (
+    re.compile(r"<message>(.*?)</message>", re.DOTALL),
+    re.compile(r"^message=(.*)$", re.MULTILINE),
 )
 
 
@@ -343,18 +353,40 @@ def _client_error(
     response: httpx.Response, request: httpx.Request, body: str
 ) -> ENAQueryError | ENAHTTPError:
     """Pick the exception for a 4xx. ENA uses 400 for a malformed query."""
+    detail = _error_message(body)
     if response.status_code in (400, 422):
         return ENAQueryError(
-            body.strip() or f"ENA rejected the query with HTTP {response.status_code}",
+            detail or body.strip() or f"ENA rejected the query with HTTP {response.status_code}",
             url=str(request.url),
             body=body,
         )
-    return ENAHTTPError(
-        f"ENA returned HTTP {response.status_code} for {request.url}",
+    error = ENANotFoundError if response.status_code == 404 else ENAHTTPError
+    message = f"ENA returned HTTP {response.status_code} for {request.url}"
+    return error(
+        f"{message}: {detail}" if detail else message,
         status_code=response.status_code,
         url=str(request.url),
         body=body,
     )
+
+
+def _error_message(body: str) -> str | None:
+    """ENA's own explanation out of a structured error body, if it gave one."""
+    stripped = body.strip()
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        message = payload.get("message") if isinstance(payload, dict) else None
+        if not isinstance(message, str):
+            return None
+        return message.strip() or None
+    for pattern in _ERROR_MESSAGE:
+        match = pattern.search(stripped)
+        if match is not None and match.group(1).strip():
+            return html.unescape(match.group(1).strip())
+    return None
 
 
 def _guarded(lines: Iterator[str], request: httpx.Request) -> Iterator[str]:

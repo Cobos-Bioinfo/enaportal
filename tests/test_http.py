@@ -20,6 +20,7 @@ from enaportal._http import (
 from enaportal.errors import (
     ENAConnectionError,
     ENAHTTPError,
+    ENANotFoundError,
     ENAQueryError,
     ENARateLimitError,
     ENATimeoutError,
@@ -213,6 +214,58 @@ def test_http_400_becomes_a_query_error(client: ENAHTTPClient) -> None:
 
     with pytest.raises(ENAQueryError, match="sortFields"):
         client.get_text("search")
+
+
+@respx.mock
+def test_http_404_is_a_not_found_error(client: ENAHTTPClient) -> None:
+    body = '{"timestamp": 1, "status": 404, "error": "Not Found", "path": "/ena/portal/api/x"}'
+    respx.get(COUNT_URL).mock(return_value=httpx.Response(404, text=body))
+
+    with pytest.raises(ENANotFoundError) as caught:
+        client.get_text("count")
+
+    assert caught.value.status_code == 404
+    assert isinstance(caught.value, ENAHTTPError)
+
+
+@respx.mock
+def test_http_404_carries_enas_message_when_it_sent_one(client: ENAHTTPClient) -> None:
+    body = '{"status": 404, "message": "Failed to get response from SRA API. Response code 404"}'
+    respx.get(COUNT_URL).mock(return_value=httpx.Response(404, text=body))
+
+    with pytest.raises(ENANotFoundError, match="Failed to get response from SRA API"):
+        client.get_text("count")
+
+
+# The Browser API serialises one error to match the format that was asked for.
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            '<?xml version="1.0" encoding="UTF-8"?>\n<ErrorDetails>\n  <status>400</status>\n'
+            "  <message>Invalid result type &apos;nope&apos;.</message>\n</ErrorDetails>\n",
+            "Invalid result type 'nope'.",
+        ),
+        (
+            "timestamp=1\nstatus=400\nerror=Bad Request\n"
+            "message=Format embl is not available for record PRJEB1787\npath=/x\n",
+            "Format embl is not available for record PRJEB1787",
+        ),
+        (
+            '{"status": 400, "error": "Bad Request", "message": "All accessions must match"}',
+            "All accessions must match",
+        ),
+    ],
+)
+@respx.mock
+def test_http_400_reports_enas_own_message(client: ENAHTTPClient, body: str, message: str) -> None:
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(400, text=body))
+
+    with pytest.raises(ENAQueryError) as caught:
+        client.get_text("search")
+
+    assert str(caught.value) == message
+    assert caught.value.body == body
 
 
 @respx.mock
