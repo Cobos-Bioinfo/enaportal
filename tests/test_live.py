@@ -6,16 +6,20 @@ still hold, not that any particular record exists.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from datetime import date
 from itertools import pairwise
 from pathlib import Path
+from xml.etree import ElementTree
 
 import httpx
 import polars as pl
 import pytest
 
+from enaportal.browser import BrowserClient
 from enaportal.bulk import Partition, outside_query, range_query
+from enaportal.errors import ENANotFoundError, ENAQueryError
 from enaportal.files import file_urls, to_manifest
 from enaportal.portal import PortalClient
 from enaportal.schema import SchemaClient
@@ -27,6 +31,12 @@ pytestmark = pytest.mark.live
 def client(tmp_path: Path) -> Iterator[PortalClient]:
     with PortalClient(cache_dir=tmp_path) as portal:
         yield portal
+
+
+@pytest.fixture
+def browser() -> Iterator[BrowserClient]:
+    with BrowserClient() as client:
+        yield client
 
 
 def test_results_still_lists_every_result_type(client: PortalClient) -> None:
@@ -282,3 +292,95 @@ def test_a_killed_bulk_fetch_resumes_without_refetching(
     assert all(path.stat().st_mtime_ns == mtime for path, mtime in landed.items()), (
         "a partition that was already on disk was fetched again"
     )
+
+
+def test_fetch_returns_a_study_as_one_xml_document(browser: BrowserClient) -> None:
+    root = ElementTree.fromstring(browser.fetch("PRJEB1787").encode())
+
+    assert root.tag == "PROJECT_SET"
+    assert [project.get("accession") for project in root] == ["PRJEB1787"]
+
+
+def test_the_secondary_accession_is_a_different_record_type(browser: BrowserClient) -> None:
+    root = ElementTree.fromstring(browser.fetch("ERP001736").encode())
+
+    assert root.tag == "STUDY_SET"
+
+
+def test_fetch_batches_several_runs_into_one_request(browser: BrowserClient) -> None:
+    root = ElementTree.fromstring(browser.fetch(["ERR164407", "ERR164408"]).encode())
+
+    assert sorted(run.get("accession") or "" for run in root) == ["ERR164407", "ERR164408"]
+
+
+def test_ena_still_drops_an_unknown_accession_from_a_batch(browser: BrowserClient) -> None:
+    with pytest.warns(UserWarning, match="Only 1 of 2"):
+        xml = browser.fetch(["ERR164407", "ERR99999999"])
+
+    assert "ERR164407" in xml
+
+
+def test_an_unknown_accession_alone_is_not_found(browser: BrowserClient) -> None:
+    with pytest.raises(ENANotFoundError, match="ERR99999999"):
+        browser.fetch("ERR99999999")
+
+
+def test_a_batch_must_share_one_data_type(browser: BrowserClient) -> None:
+    with pytest.raises(ENAQueryError, match="same data type"):
+        browser.fetch(["PRJEB1787", "ERR164407"])
+
+
+def test_a_format_the_record_lacks_is_a_query_error(browser: BrowserClient) -> None:
+    with pytest.raises(ENAQueryError, match="not available"):
+        browser.fetch("PRJEB1787", format="embl")
+
+
+def test_a_taxon_counts_as_one_record_despite_its_lineage(browser: BrowserClient) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        xml = browser.fetch(["9606", "10090"])
+
+    assert "Homo sapiens" in xml
+
+
+def test_embl_annotation_only_leaves_out_the_sequence(browser: BrowserClient) -> None:
+    full = browser.fetch("A00145", format="embl")
+    annotation = browser.fetch("A00145", format="embl", annotation_only=True)
+
+    assert "\nSQ   " in full
+    assert "\nSQ   " not in annotation
+    assert annotation.rstrip().endswith("//")
+
+
+def test_line_limit_applies_to_each_record(browser: BrowserClient) -> None:
+    embl = browser.fetch(["A00145", "A00146"], format="embl", line_limit=3)
+
+    assert len(embl.splitlines()) == 6
+
+
+def test_fetch_to_file_streams_a_chromosome(browser: BrowserClient, tmp_path: Path) -> None:
+    path = tmp_path / "chrI.fasta"
+
+    assert browser.fetch_to_file(path, "BK006935.2", format="fasta") == 1
+    assert path.read_text().startswith(">ENA|BK006935|BK006935.2 ")
+    assert path.stat().st_size > 230_000
+
+
+def test_textsearch_returns_unquoted_accessions(browser: BrowserClient) -> None:
+    hits = browser.textsearch("Tara oceans", result="read_study", limit=5)
+
+    assert hits.columns == ["accession", "description"]
+    assert hits.height == 5
+    assert not any(accession.startswith('"') for accession in hits["accession"])
+
+
+def test_textsearch_count_agrees_with_the_hits(browser: BrowserClient) -> None:
+    total = browser.textsearch_count("Tara oceans", result="read_study")
+
+    assert 0 < total < 1000
+    assert browser.textsearch("Tara oceans", result="read_study", limit=None).height == total
+
+
+def test_textsearch_rejects_an_unknown_result_type(browser: BrowserClient) -> None:
+    with pytest.raises(ENAQueryError, match="Invalid result type"):
+        browser.textsearch("Tara oceans", result="nonsense")
