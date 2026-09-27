@@ -226,7 +226,7 @@ class ENAHTTPClient:
         request = self._build_request(method, path, params=params, data=data)
         response = self._send(request, stream=True)
         try:
-            lines = response.iter_lines()
+            lines = _guarded(response.iter_lines(), request)
             first = next(lines, None)
             if first is None:
                 yield iter(())
@@ -355,6 +355,29 @@ def _client_error(
         url=str(request.url),
         body=body,
     )
+
+
+def _guarded(lines: Iterator[str], request: httpx.Request) -> Iterator[str]:
+    """Raise a failure part way through a streamed body as an ENAError.
+
+    ENA can abort a response after sending some of it, and httpx only notices
+    while the caller is iterating, long after _send has returned. It is not
+    retried: the lines already read have been handed on.
+    """
+    read = 0
+    try:
+        for line in lines:
+            yield line
+            read += 1
+    except httpx.TimeoutException as exc:
+        raise ENATimeoutError(
+            f"Response from {request.url} stalled after {read} lines: {exc}"
+        ) from exc
+    except httpx.TransportError as exc:
+        raise ENAConnectionError(
+            f"ENA cut the response from {request.url} short after {read} lines: {exc}",
+            url=str(request.url),
+        ) from exc
 
 
 def _drain(response: httpx.Response) -> str:

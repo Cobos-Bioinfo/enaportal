@@ -316,6 +316,41 @@ def test_post_sends_a_form_body(client: ENAHTTPClient) -> None:
     assert route.calls[0].request.content == b"result=read_run&limit=0"
 
 
+class _CutShort(httpx.SyncByteStream):
+    """A body that stops part way, the way ENA aborts a long text search."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b"accession\tdescription\nERR1\tone\n"
+        raise self.error
+
+
+@respx.mock
+def test_a_body_cut_short_raises_a_connection_error(client: ENAHTTPClient) -> None:
+    error = httpx.RemoteProtocolError("peer closed connection without sending complete body")
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, stream=_CutShort(error)))
+
+    with (
+        pytest.raises(ENAConnectionError, match="short after 2 lines"),
+        client.stream_lines("search") as lines,
+    ):
+        list(lines)
+
+
+@respx.mock
+def test_a_body_that_stalls_raises_a_timeout(client: ENAHTTPClient) -> None:
+    error = httpx.ReadTimeout("timed out")
+    respx.get(SEARCH_URL).mock(return_value=httpx.Response(200, stream=_CutShort(error)))
+
+    with (
+        pytest.raises(ENATimeoutError, match="stalled after 2 lines"),
+        client.stream_lines("search") as lines,
+    ):
+        list(lines)
+
+
 def test_negative_retries_are_rejected() -> None:
     with pytest.raises(ValueError, match="max_retries"):
         ENAHTTPClient(max_retries=-1)
